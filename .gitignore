@@ -1,6 +1,7 @@
 # ETC
 data/*
 takeout/maps/*
+repomix*.md
 
 # General
 .DS_Store
