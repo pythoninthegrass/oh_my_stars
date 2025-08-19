@@ -1,6 +1,6 @@
 ---
 title: Extract Review Timestamps as Visit Confirmations
-status: To Do
+status: Done
 priority: medium
 labels: [data-extraction, visit-tracking]
 ---
@@ -12,28 +12,28 @@ Extract review data from `your_places/Reviews.json` to use review timestamps as 
 ## Acceptance Criteria
 
 1. **Review Data Extraction**
-   - [ ] Parse `takeout/maps/your_places/Reviews.json`
-   - [ ] Extract place name, coordinates, and review timestamp
-   - [ ] Extract review text and rating for context
-   - [ ] Handle missing or incomplete review data
+   - [x] Parse `takeout/maps/your_places/Reviews.json`
+   - [x] Extract place name, coordinates, and review timestamp
+   - [x] Extract review text and rating for context
+   - [x] Handle missing or incomplete review data
 
 2. **Location Matching**
-   - [ ] Match reviews to saved/labeled places by name and coordinates
-   - [ ] Resolve ambiguous matches (similar names, nearby locations)
-   - [ ] Match reviews to regional centers
-   - [ ] Track unmatched reviews
+   - [x] Match reviews to saved/labeled places by name and coordinates
+   - [x] Resolve ambiguous matches (similar names, nearby locations)
+   - [x] Match reviews to regional centers
+   - [x] Track unmatched reviews
 
 3. **Visit Confirmation**
-   - [ ] Use review date as confirmed visit date
-   - [ ] Add review visits to regional visit history
-   - [ ] Flag reviews as "confirmed visits" vs photo-based visits
-   - [ ] Handle multiple reviews for same location
+   - [x] Use review date as confirmed visit date
+   - [x] Add review visits to regional visit history
+   - [x] Flag reviews as "confirmed visits" vs photo-based visits
+   - [x] Handle multiple reviews for same location
 
 4. **Output**
-   - [ ] Generate `data/review_visits.json` with processed data
-   - [ ] Include review context (rating, text preview)
-   - [ ] Update regional visit data with review confirmations
-   - [ ] Track statistics on matched vs unmatched reviews
+   - [x] Generate `data/review_visits.json` with processed data
+   - [x] Include review context (rating, text preview)
+   - [x] Update regional visit data with review confirmations
+   - [x] Track statistics on matched vs unmatched reviews
 
 ## Technical Requirements
 

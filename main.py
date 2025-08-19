@@ -22,6 +22,7 @@ Commands:
     extract-saved-places: Extract saved places with timestamps and integrate with regions
     extract-photo-metadata: Extract geolocation data from photo metadata
     correlate-photos-to-regions: Match geotagged photos to regions and saved places
+    extract-review-visits: Extract review timestamps as visit confirmations
 """
 
 import json
@@ -900,6 +901,258 @@ class PhotoLocationCorrelator:
             return False
 
 
+class ReviewVisitsExtractor:
+    """Extract review timestamps as visit confirmations"""
+    
+    def __init__(self):
+        self.place_matching_tolerance_miles = 0.25  # Quarter mile for fuzzy matching
+        self.region_distance_threshold_miles = 10.0
+    
+    def load_existing_data(self, data_dir: Path) -> tuple[dict, dict]:
+        """Load regional centers and saved/labeled places data"""
+        regional_centers = {}
+        all_places = []
+        
+        # Load regional centers
+        regional_file = data_dir / 'regional_centers.json'
+        if regional_file.exists():
+            with open(regional_file) as f:
+                regional_centers = json.load(f)
+        
+        # Load saved places
+        saved_file = data_dir / 'saved_places.json'
+        if saved_file.exists():
+            with open(saved_file) as f:
+                saved_data = json.load(f)
+                all_places.extend(saved_data.get('places', []))
+        
+        # Load labeled places
+        labeled_file = data_dir / 'labeled_places.json'
+        if labeled_file.exists():
+            with open(labeled_file) as f:
+                labeled_data = json.load(f)
+                all_places.extend(labeled_data.get('places', []))
+        
+        return regional_centers, all_places
+    
+    def calculate_distance_miles(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Calculate distance in miles between two coordinates"""
+        try:
+            point1 = (lat1, lon1)
+            point2 = (lat2, lon2)
+            distance = geodesic(point1, point2).miles
+            return distance
+        except Exception as e:
+            logger.warning(f"Error calculating distance: {e}")
+            return float('inf')
+    
+    def fuzzy_match_place_name(self, review_name: str, place_name: str) -> float:
+        """Simple fuzzy matching score for place names (0-1, higher is better)"""
+        review_name_lower = review_name.lower().strip()
+        place_name_lower = place_name.lower().strip()
+        
+        # Exact match
+        if review_name_lower == place_name_lower:
+            return 1.0
+        
+        # Substring match
+        if review_name_lower in place_name_lower or place_name_lower in review_name_lower:
+            return 0.8
+        
+        # Word overlap - simple approach
+        review_words = set(review_name_lower.split())
+        place_words = set(place_name_lower.split())
+        
+        if review_words and place_words:
+            overlap = len(review_words.intersection(place_words))
+            total = len(review_words.union(place_words))
+            return overlap / total if total > 0 else 0.0
+        
+        return 0.0
+    
+    def find_matching_place(self, review_name: str, review_lat: float, review_lon: float, places: list) -> dict | None:
+        """Find the best matching place for a review"""
+        best_match = None
+        best_score = 0.0
+        
+        for place in places:
+            place_lat = place.get('latitude')
+            place_lon = place.get('longitude')
+            place_name = place.get('name', '')
+            
+            if place_lat is None or place_lon is None:
+                continue
+            
+            # Calculate distance
+            distance = self.calculate_distance_miles(review_lat, review_lon, place_lat, place_lon)
+            
+            # Only consider places within tolerance
+            if distance > self.place_matching_tolerance_miles:
+                continue
+            
+            # Calculate name similarity
+            name_score = self.fuzzy_match_place_name(review_name, place_name)
+            
+            # Combined score: name similarity weighted more than distance
+            # Closer places get bonus, perfect name match is weighted heavily
+            distance_score = max(0, 1 - (distance / self.place_matching_tolerance_miles))
+            combined_score = (name_score * 0.7) + (distance_score * 0.3)
+            
+            if combined_score > best_score and combined_score > 0.3:  # Minimum threshold
+                best_score = combined_score
+                best_match = {
+                    'place': place,
+                    'distance': distance,
+                    'name_score': name_score,
+                    'combined_score': combined_score
+                }
+        
+        return best_match
+    
+    def find_nearest_region(self, review_lat: float, review_lon: float, regions: dict) -> tuple[str | None, float]:
+        """Find the nearest region for a review location"""
+        nearest_region = None
+        min_distance = float('inf')
+        
+        for region_name, region_data in regions.items():
+            center = region_data.get('center', {})
+            if not center:
+                continue
+                
+            region_lat = center.get('latitude')
+            region_lon = center.get('longitude')
+            
+            if region_lat is None or region_lon is None:
+                continue
+            
+            distance = self.calculate_distance_miles(review_lat, review_lon, region_lat, region_lon)
+            
+            if distance < min_distance and distance <= self.region_distance_threshold_miles:
+                min_distance = distance
+                nearest_region = region_name
+        
+        return nearest_region, min_distance if nearest_region else float('inf')
+    
+    def extract_review_visits(self, reviews_file: Path, data_dir: Path, output_dir: Path) -> bool:
+        """Main processing function for review visits"""
+        try:
+            # Load review data
+            with open(reviews_file) as f:
+                review_data = json.load(f)
+            
+            reviews = review_data.get('features', [])
+            logger.info(f"Loaded {len(reviews)} reviews")
+            
+            if not reviews:
+                logger.warning("No reviews found")
+                return False
+            
+            # Load existing data
+            regional_data, all_places = self.load_existing_data(data_dir)
+            
+            logger.info(f"Loaded {len(regional_data.get('regions', {}))} regions and {len(all_places)} places")
+            
+            # Process reviews
+            processed_reviews = []
+            matched_to_places = 0
+            matched_to_regions = 0
+            
+            for i, review_feature in enumerate(reviews):
+                try:
+                    coords = review_feature.get('geometry', {}).get('coordinates', [])
+                    props = review_feature.get('properties', {})
+                    location = props.get('location', {})
+                    
+                    if len(coords) < 2:
+                        logger.warning(f"Review {i+1} missing coordinates")
+                        continue
+                    
+                    review_lon, review_lat = coords[0], coords[1]
+                    
+                    review_record = {
+                        'id': f"review_{i+1:03d}",
+                        'place_name': location.get('name', 'Unknown Place'),
+                        'coordinates': {
+                            'latitude': review_lat,
+                            'longitude': review_lon
+                        },
+                        'review_date': props.get('date'),
+                        'rating': props.get('five_star_rating_published'),
+                        'text_preview': (props.get('review_text_published', '')[:100] + '...') if props.get('review_text_published') else '',
+                        'address': location.get('address', ''),
+                        'google_maps_url': props.get('google_maps_url', ''),
+                        'matched_place': None,
+                        'place_match_details': None,
+                        'region': None,
+                        'distance_to_region': None,
+                        'visit_type': 'confirmed'
+                    }
+                    
+                    # Try to match to existing places
+                    place_match = self.find_matching_place(
+                        review_record['place_name'], 
+                        review_lat, 
+                        review_lon, 
+                        all_places
+                    )
+                    
+                    if place_match:
+                        matched_to_places += 1
+                        review_record['matched_place'] = place_match['place'].get('id')
+                        review_record['place_match_details'] = {
+                            'distance': place_match['distance'],
+                            'name_score': place_match['name_score'],
+                            'combined_score': place_match['combined_score'],
+                            'matched_name': place_match['place'].get('name')
+                        }
+                    
+                    # Find nearest region
+                    nearest_region, distance_to_region = self.find_nearest_region(
+                        review_lat, review_lon, regional_data.get('regions', {})
+                    )
+                    
+                    if nearest_region:
+                        matched_to_regions += 1
+                        review_record['region'] = nearest_region
+                        review_record['distance_to_region'] = distance_to_region
+                    
+                    processed_reviews.append(review_record)
+                    
+                except Exception as e:
+                    logger.error(f"Error processing review {i+1}: {e}")
+                    continue
+            
+            # Prepare output
+            output_dir.mkdir(exist_ok=True)
+            
+            review_visits_output = {
+                'metadata': {
+                    'extraction_date': datetime.now(UTC).isoformat(),
+                    'total_reviews': len(processed_reviews),
+                    'matched_to_places': matched_to_places,
+                    'matched_to_regions': matched_to_regions,
+                    'place_matching_tolerance_miles': self.place_matching_tolerance_miles,
+                    'region_distance_threshold_miles': self.region_distance_threshold_miles,
+                    'source_file': str(reviews_file)
+                },
+                'reviews': processed_reviews
+            }
+            
+            with open(output_dir / 'review_visits.json', 'w') as f:
+                json.dump(review_visits_output, f, indent=2)
+            
+            logger.info(f"Successfully processed {len(processed_reviews)} reviews")
+            logger.info(f"Matched {matched_to_places} reviews to existing places ({(matched_to_places/len(processed_reviews)*100):.1f}%)")
+            logger.info(f"Matched {matched_to_regions} reviews to regions ({(matched_to_regions/len(processed_reviews)*100):.1f}%)")
+            logger.info(f"Output written to {output_dir / 'review_visits.json'}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error extracting review visits: {e}")
+            return False
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__.strip())
@@ -954,6 +1207,23 @@ def main():
 
         correlator = PhotoLocationCorrelator()
         success = correlator.correlate_photos_to_locations(data_dir, output_dir)
+        sys.exit(0 if success else 1)
+
+    elif command == "extract-review-visits":
+        reviews_file = Path("takeout/maps/your_places/Reviews.json")
+        data_dir = Path("data")
+        output_dir = Path("data")
+
+        if not reviews_file.exists():
+            logger.error(f"Reviews file not found: {reviews_file}")
+            sys.exit(1)
+
+        if not data_dir.exists():
+            logger.error(f"Data directory not found: {data_dir}")
+            sys.exit(1)
+
+        extractor = ReviewVisitsExtractor()
+        success = extractor.extract_review_visits(reviews_file, data_dir, output_dir)
         sys.exit(0 if success else 1)
 
     else:
