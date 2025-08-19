@@ -23,6 +23,7 @@ Commands:
     extract-photo-metadata: Extract geolocation data from photo metadata
     correlate-photos-to-regions: Match geotagged photos to regions and saved places
     extract-review-visits: Extract review timestamps as visit confirmations
+    generate-visit-timeline: Generate comprehensive visit timeline from all data sources
 """
 
 import json
@@ -1153,6 +1154,359 @@ class ReviewVisitsExtractor:
             return False
 
 
+class VisitTimelineGenerator:
+    """Generate comprehensive visit timeline from all data sources"""
+    
+    def __init__(self):
+        self.deduplication_window_hours = 24  # Consider visits within 24 hours as same visit
+    
+    def load_all_data(self, data_dir: Path) -> tuple[dict, dict, dict, dict]:
+        """Load all required data sources"""
+        photo_locations = {}
+        review_visits = {}
+        saved_places = {}
+        regional_centers = {}
+        
+        # Load photo locations
+        photo_file = data_dir / 'photo_locations.json'
+        if photo_file.exists():
+            with open(photo_file) as f:
+                photo_locations = json.load(f)
+        
+        # Load review visits
+        review_file = data_dir / 'review_visits.json'
+        if review_file.exists():
+            with open(review_file) as f:
+                review_visits = json.load(f)
+        
+        # Load saved places
+        saved_file = data_dir / 'saved_places.json'
+        if saved_file.exists():
+            with open(saved_file) as f:
+                saved_places = json.load(f)
+        
+        # Load regional centers
+        regional_file = data_dir / 'regional_centers.json'
+        if regional_file.exists():
+            with open(regional_file) as f:
+                regional_centers = json.load(f)
+        
+        return photo_locations, review_visits, saved_places, regional_centers
+    
+    def parse_timestamp(self, timestamp_str: str) -> datetime | None:
+        """Parse timestamp string to datetime object, filtering out epoch time"""
+        if not timestamp_str:
+            return None
+        try:
+            dt = parse_date(timestamp_str)
+            # Filter out epoch time (1970-01-01) as it's not real visit data
+            if dt.year == 1970:
+                return None
+            return dt
+        except Exception as e:
+            logger.warning(f"Failed to parse timestamp '{timestamp_str}': {e}")
+            return None
+    
+    def extract_visits_from_photos(self, photo_data: dict) -> list:
+        """Extract visit data from photo locations"""
+        visits = []
+        
+        for region_name, region_info in photo_data.get('regions', {}).items():
+            for photo in region_info.get('photos', []):
+                timestamp = photo.get('timestamp')
+                if not timestamp:
+                    continue
+                
+                dt = self.parse_timestamp(timestamp)
+                if not dt:
+                    continue
+                
+                places_visited = []
+                nearest_place = photo.get('nearest_place')
+                if nearest_place:
+                    places_visited.append(nearest_place.get('name', 'Unknown'))
+                
+                visit = {
+                    'region': region_name,
+                    'datetime': dt,
+                    'date': dt.date(),
+                    'source': 'photo',
+                    'source_id': photo.get('filename'),
+                    'places_visited': places_visited,
+                    'coordinates': photo.get('coordinates', {}),
+                    'timestamp_str': timestamp
+                }
+                visits.append(visit)
+        
+        return visits
+    
+    def extract_visits_from_reviews(self, review_data: dict) -> list:
+        """Extract visit data from review visits"""
+        visits = []
+        
+        for review in review_data.get('reviews', []):
+            timestamp = review.get('review_date')
+            region = review.get('region')
+            
+            if not timestamp or not region:
+                continue
+            
+            dt = self.parse_timestamp(timestamp)
+            if not dt:
+                continue
+            
+            visit = {
+                'region': region,
+                'datetime': dt,
+                'date': dt.date(),
+                'source': 'review',
+                'source_id': review.get('id'),
+                'places_visited': [review.get('place_name', 'Unknown')],
+                'coordinates': review.get('coordinates', {}),
+                'timestamp_str': timestamp,
+                'rating': review.get('rating'),
+                'review_text_preview': review.get('text_preview', '')
+            }
+            visits.append(visit)
+        
+        return visits
+    
+    def extract_visits_from_saved_places(self, saved_data: dict) -> list:
+        """Extract visit data from saved places"""
+        visits = []
+        
+        for place in saved_data.get('places', []):
+            timestamp = place.get('saved_date')
+            region = place.get('region')
+            
+            if not timestamp or not region:
+                continue
+            
+            dt = self.parse_timestamp(timestamp)
+            if not dt:
+                continue
+            
+            visit = {
+                'region': region,
+                'datetime': dt,
+                'date': dt.date(),
+                'source': 'saved_place',
+                'source_id': place.get('id'),
+                'places_visited': [place.get('name', 'Unknown')],
+                'coordinates': {
+                    'latitude': place.get('latitude'),
+                    'longitude': place.get('longitude')
+                },
+                'timestamp_str': timestamp
+            }
+            visits.append(visit)
+        
+        return visits
+    
+    def deduplicate_visits(self, visits: list) -> list:
+        """Remove duplicate visits within the deduplication window"""
+        if not visits:
+            return []
+        
+        # Sort visits by datetime
+        visits.sort(key=lambda v: v['datetime'])
+        
+        deduplicated = []
+        
+        for visit in visits:
+            # Check if this visit is a duplicate of any recent visit to the same region
+            is_duplicate = False
+            
+            for existing in reversed(deduplicated):
+                if existing['region'] != visit['region']:
+                    continue
+                
+                time_diff = abs((visit['datetime'] - existing['datetime']).total_seconds() / 3600)
+                if time_diff <= self.deduplication_window_hours:
+                    # This is a duplicate - merge places_visited if different
+                    new_places = set(visit['places_visited']) - set(existing['places_visited'])
+                    existing['places_visited'].extend(list(new_places))
+                    
+                    # Keep the source with most information (reviews > photos > saved places)
+                    source_priority = {'review': 3, 'photo': 2, 'saved_place': 1}
+                    if source_priority.get(visit['source'], 0) > source_priority.get(existing['source'], 0):
+                        existing['source'] = visit['source']
+                        existing['source_id'] = visit['source_id']
+                        if 'rating' in visit:
+                            existing['rating'] = visit['rating']
+                        if 'review_text_preview' in visit:
+                            existing['review_text_preview'] = visit['review_text_preview']
+                    
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                deduplicated.append(visit)
+        
+        return deduplicated
+    
+    def calculate_visit_stats(self, visits: list) -> dict:
+        """Calculate visit statistics for a region"""
+        if not visits:
+            return {}
+        
+        # Sort by datetime
+        visits.sort(key=lambda v: v['datetime'])
+        
+        first_visit = visits[0]['datetime']
+        last_visit = visits[-1]['datetime']
+        
+        # Calculate average days between visits
+        avg_days_between = 0
+        if len(visits) > 1:
+            total_days = (last_visit - first_visit).days
+            avg_days_between = round(total_days / (len(visits) - 1), 1)
+        
+        # Group by year
+        visits_by_year = {}
+        visits_by_month = {}
+        
+        for visit in visits:
+            year = str(visit['datetime'].year)
+            month = visit['datetime'].strftime('%Y-%m')
+            
+            visits_by_year[year] = visits_by_year.get(year, 0) + 1
+            visits_by_month[month] = visits_by_month.get(month, 0) + 1
+        
+        return {
+            'visit_count': len(visits),
+            'first_visit': first_visit.isoformat(),
+            'last_visit': last_visit.isoformat(),
+            'avg_days_between_visits': avg_days_between,
+            'visits_by_year': dict(sorted(visits_by_year.items())),
+            'visits_by_month': dict(sorted(visits_by_month.items()))
+        }
+    
+    def generate_timeline(self, data_dir: Path, output_dir: Path) -> bool:
+        """Main processing function to generate visit timeline"""
+        try:
+            # Load all data sources
+            photo_data, review_data, saved_data, regional_data = self.load_all_data(data_dir)
+            
+            logger.info("Extracting visits from all data sources...")
+            
+            # Extract visits from each source
+            photo_visits = self.extract_visits_from_photos(photo_data)
+            review_visits = self.extract_visits_from_reviews(review_data)
+            saved_visits = self.extract_visits_from_saved_places(saved_data)
+            
+            logger.info(f"Extracted {len(photo_visits)} photo visits, {len(review_visits)} review visits, {len(saved_visits)} saved place visits")
+            
+            # Combine all visits
+            all_visits = photo_visits + review_visits + saved_visits
+            
+            if not all_visits:
+                logger.warning("No visits found from any data source")
+                return False
+            
+            # Group by region and deduplicate
+            visits_by_region = {}
+            for visit in all_visits:
+                region = visit['region']
+                if region not in visits_by_region:
+                    visits_by_region[region] = []
+                visits_by_region[region].append(visit)
+            
+            # Deduplicate within each region
+            for region in visits_by_region:
+                visits_by_region[region] = self.deduplicate_visits(visits_by_region[region])
+            
+            # Calculate statistics for each region
+            region_timelines = {}
+            total_visits = 0
+            all_timestamps = []
+            
+            for region, visits in visits_by_region.items():
+                if not visits:
+                    continue
+                
+                stats = self.calculate_visit_stats(visits)
+                total_visits += len(visits)
+                
+                # Prepare visit records for output
+                visit_records = []
+                for visit in visits:
+                    record = {
+                        'date': visit['timestamp_str'],
+                        'source': visit['source'],
+                        'source_id': visit['source_id'],
+                        'places_visited': visit['places_visited']
+                    }
+                    
+                    # Add optional fields if present
+                    if 'rating' in visit:
+                        record['rating'] = visit['rating']
+                    if 'review_text_preview' in visit:
+                        record['review_text_preview'] = visit['review_text_preview']
+                    
+                    visit_records.append(record)
+                    all_timestamps.append(visit['datetime'])
+                
+                region_timelines[region] = {
+                    **stats,
+                    'visits': visit_records
+                }
+            
+            # Calculate overall metadata
+            all_timestamps.sort()
+            date_range = {}
+            if all_timestamps:
+                date_range = {
+                    'first_visit': all_timestamps[0].isoformat(),
+                    'last_visit': all_timestamps[-1].isoformat()
+                }
+            
+            # Sort regions by visit count
+            region_rankings = sorted(
+                [(region, info['visit_count']) for region, info in region_timelines.items()],
+                key=lambda x: x[1],
+                reverse=True
+            )
+            
+            # Prepare output
+            output_dir.mkdir(exist_ok=True)
+            
+            timeline_output = {
+                'metadata': {
+                    'generation_date': datetime.now(UTC).isoformat(),
+                    'total_regions': len(region_timelines),
+                    'total_visits': total_visits,
+                    'date_range': date_range,
+                    'deduplication_window_hours': self.deduplication_window_hours,
+                    'data_sources': {
+                        'photo_visits': len(photo_visits),
+                        'review_visits': len(review_visits), 
+                        'saved_place_visits': len(saved_visits),
+                        'total_before_deduplication': len(all_visits)
+                    }
+                },
+                'regions': region_timelines,
+                'rankings': {
+                    'most_visited_regions': region_rankings[:10]
+                }
+            }
+            
+            with open(output_dir / 'visit_timeline.json', 'w') as f:
+                json.dump(timeline_output, f, indent=2)
+            
+            logger.info(f"Successfully generated visit timeline for {len(region_timelines)} regions")
+            logger.info(f"Total visits after deduplication: {total_visits}")
+            logger.info(f"Date range: {date_range.get('first_visit', 'N/A')} to {date_range.get('last_visit', 'N/A')}")
+            logger.info(f"Top region: {region_rankings[0][0]} ({region_rankings[0][1]} visits)" if region_rankings else "No visits found")
+            logger.info(f"Output written to {output_dir / 'visit_timeline.json'}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error generating visit timeline: {e}")
+            return False
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__.strip())
@@ -1224,6 +1578,18 @@ def main():
 
         extractor = ReviewVisitsExtractor()
         success = extractor.extract_review_visits(reviews_file, data_dir, output_dir)
+        sys.exit(0 if success else 1)
+
+    elif command == "generate-visit-timeline":
+        data_dir = Path("data")
+        output_dir = Path("data")
+
+        if not data_dir.exists():
+            logger.error(f"Data directory not found: {data_dir}")
+            sys.exit(1)
+
+        generator = VisitTimelineGenerator()
+        success = generator.generate_timeline(data_dir, output_dir)
         sys.exit(0 if success else 1)
 
     else:
