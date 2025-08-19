@@ -20,6 +20,8 @@ Usage:
 Commands:
     extract-labeled-places: Extract and group starred/labeled places by region
     extract-saved-places: Extract saved places with timestamps and integrate with regions
+    extract-photo-metadata: Extract geolocation data from photo metadata
+    correlate-photos-to-regions: Match geotagged photos to regions and saved places
 """
 
 import json
@@ -533,6 +535,371 @@ class SavedPlacesExtractor:
             return False
 
 
+class PhotoMetadataExtractor:
+    """Extract geolocation data from photo metadata JSON files"""
+    
+    def __init__(self):
+        pass
+    
+    def validate_coordinates(self, lat: float, lon: float) -> bool:
+        """Validate coordinate ranges"""
+        return -90 <= lat <= 90 and -180 <= lon <= 180
+    
+    def parse_timestamp_from_epoch(self, timestamp_str: str) -> str | None:
+        """Convert epoch timestamp to ISO format"""
+        try:
+            # Handle both string and integer timestamps
+            timestamp = int(timestamp_str)
+            dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            return dt.isoformat()
+        except Exception as e:
+            logger.warning(f"Failed to parse epoch timestamp '{timestamp_str}': {e}")
+            return None
+    
+    def process_photo_metadata(self, photos_dir: Path, output_dir: Path) -> bool:
+        """Main processing function for photo metadata"""
+        try:
+            # Find all JSON metadata files
+            json_files = list(photos_dir.glob("*.json"))
+            
+            if not json_files:
+                logger.error(f"No JSON metadata files found in {photos_dir}")
+                return False
+            
+            logger.info(f"Found {len(json_files)} metadata files to process")
+            
+            photos = []
+            geotagged_count = 0
+            timestamps = []
+            
+            for i, json_file in enumerate(json_files):
+                if i % 10 == 0 and i > 0:
+                    logger.info(f"Processing file {i+1}/{len(json_files)} ({(i+1)/len(json_files)*100:.1f}%)")
+                
+                try:
+                    with open(json_file) as f:
+                        metadata = json.load(f)
+                    
+                    # Extract filename (remove .json extension)
+                    filename = json_file.name[:-5]  # Remove .json
+                    
+                    photo_data = {
+                        'filename': filename,
+                        'has_geolocation': False,
+                        'coordinates': None,
+                        'timestamp': None,
+                        'photo_taken_time': None,
+                        'creation_time': None,
+                        'description': metadata.get('description', ''),
+                        'image_views': metadata.get('imageViews', '0')
+                    }
+                    
+                    # Extract timestamps
+                    if 'photoTakenTime' in metadata:
+                        photo_taken_timestamp = metadata['photoTakenTime'].get('timestamp')
+                        if photo_taken_timestamp:
+                            photo_data['photo_taken_time'] = self.parse_timestamp_from_epoch(photo_taken_timestamp)
+                            photo_data['timestamp'] = photo_data['photo_taken_time']  # Use photo taken time as primary
+                            if photo_data['timestamp']:
+                                timestamps.append(photo_data['timestamp'])
+                    
+                    if 'creationTime' in metadata:
+                        creation_timestamp = metadata['creationTime'].get('timestamp')
+                        if creation_timestamp:
+                            photo_data['creation_time'] = self.parse_timestamp_from_epoch(creation_timestamp)
+                            # If no photo taken time, use creation time
+                            if not photo_data['timestamp']:
+                                photo_data['timestamp'] = photo_data['creation_time']
+                                if photo_data['timestamp']:
+                                    timestamps.append(photo_data['timestamp'])
+                    
+                    # Extract geolocation if available
+                    if 'geoDataExif' in metadata:
+                        geo_data = metadata['geoDataExif']
+                        
+                        lat = geo_data.get('latitude')
+                        lon = geo_data.get('longitude')
+                        
+                        if lat is not None and lon is not None:
+                            if self.validate_coordinates(lat, lon):
+                                photo_data['has_geolocation'] = True
+                                photo_data['coordinates'] = {
+                                    'latitude': lat,
+                                    'longitude': lon,
+                                    'altitude': geo_data.get('altitude', None)
+                                }
+                                geotagged_count += 1
+                            else:
+                                logger.warning(f"Invalid coordinates in {filename}: lat={lat}, lon={lon}")
+                    
+                    photos.append(photo_data)
+                    
+                except Exception as e:
+                    logger.error(f"Error processing {json_file}: {e}")
+                    continue
+            
+            # Calculate statistics
+            total_photos = len(photos)
+            date_range = {}
+            if timestamps:
+                timestamps.sort()
+                date_range = {
+                    'earliest': timestamps[0],
+                    'latest': timestamps[-1]
+                }
+            
+            # Prepare output
+            output_dir.mkdir(exist_ok=True)
+            
+            photo_metadata_output = {
+                'metadata': {
+                    'extraction_date': datetime.now(UTC).isoformat(),
+                    'total_photos': total_photos,
+                    'geotagged_photos': geotagged_count,
+                    'non_geotagged_photos': total_photos - geotagged_count,
+                    'geolocation_percentage': round((geotagged_count / total_photos * 100), 2) if total_photos > 0 else 0,
+                    'source_directory': str(photos_dir),
+                    'date_range': date_range
+                },
+                'photos': photos
+            }
+            
+            with open(output_dir / 'photo_metadata.json', 'w') as f:
+                json.dump(photo_metadata_output, f, indent=2)
+            
+            logger.info(f"Successfully processed {total_photos} photo metadata files")
+            logger.info(f"Found {geotagged_count} geotagged photos ({(geotagged_count/total_photos*100):.1f}%)")
+            logger.info(f"Date range: {date_range.get('earliest', 'N/A')} to {date_range.get('latest', 'N/A')}")
+            logger.info(f"Output written to {output_dir / 'photo_metadata.json'}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error processing photo metadata: {e}")
+            return False
+
+
+class PhotoLocationCorrelator:
+    """Correlate geotagged photos to regions and saved places"""
+    
+    def __init__(self):
+        self.region_distance_threshold_miles = 10.0
+        self.place_distance_threshold_miles = 0.1
+    
+    def load_existing_data(self, data_dir: Path) -> tuple[dict, dict, dict]:
+        """Load regional centers, saved places, and photo metadata"""
+        regional_centers = {}
+        saved_places = {}
+        photo_metadata = {}
+        
+        # Load regional centers
+        regional_file = data_dir / 'regional_centers.json'
+        if regional_file.exists():
+            with open(regional_file) as f:
+                regional_centers = json.load(f)
+        
+        # Load saved places
+        saved_file = data_dir / 'saved_places.json'
+        if saved_file.exists():
+            with open(saved_file) as f:
+                saved_places = json.load(f)
+        
+        # Load labeled places
+        labeled_file = data_dir / 'labeled_places.json'
+        if labeled_file.exists():
+            with open(labeled_file) as f:
+                labeled_places = json.load(f)
+                # Merge labeled places into saved places format for unified processing
+                if 'places' not in saved_places:
+                    saved_places['places'] = []
+                saved_places['places'].extend(labeled_places.get('places', []))
+        
+        # Load photo metadata
+        photo_file = data_dir / 'photo_metadata.json'
+        if photo_file.exists():
+            with open(photo_file) as f:
+                photo_metadata = json.load(f)
+        
+        return regional_centers, saved_places, photo_metadata
+    
+    def calculate_distance_miles(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Calculate distance in miles between two coordinates"""
+        try:
+            point1 = (lat1, lon1)
+            point2 = (lat2, lon2)
+            distance = geodesic(point1, point2).miles
+            return distance
+        except Exception as e:
+            logger.warning(f"Error calculating distance: {e}")
+            return float('inf')
+    
+    def find_nearest_region(self, photo_lat: float, photo_lon: float, regions: dict) -> tuple[str | None, float]:
+        """Find the nearest region within threshold distance"""
+        nearest_region = None
+        min_distance = float('inf')
+        
+        for region_name, region_data in regions.items():
+            center = region_data.get('center', {})
+            if not center:
+                continue
+                
+            region_lat = center.get('latitude')
+            region_lon = center.get('longitude')
+            
+            if region_lat is None or region_lon is None:
+                continue
+            
+            distance = self.calculate_distance_miles(photo_lat, photo_lon, region_lat, region_lon)
+            
+            if distance < min_distance and distance <= self.region_distance_threshold_miles:
+                min_distance = distance
+                nearest_region = region_name
+        
+        return nearest_region, min_distance if nearest_region else float('inf')
+    
+    def find_nearest_places(self, photo_lat: float, photo_lon: float, places: list) -> list:
+        """Find saved/labeled places within threshold distance"""
+        nearby_places = []
+        
+        for place in places:
+            place_lat = place.get('latitude')
+            place_lon = place.get('longitude')
+            
+            if place_lat is None or place_lon is None:
+                continue
+            
+            distance = self.calculate_distance_miles(photo_lat, photo_lon, place_lat, place_lon)
+            
+            if distance <= self.place_distance_threshold_miles:
+                nearby_places.append({
+                    'name': place.get('name', 'Unknown'),
+                    'distance': distance,
+                    'id': place.get('id', ''),
+                    'type': 'labeled' if place.get('id', '').startswith('place_') else 'saved'
+                })
+        
+        # Sort by distance
+        nearby_places.sort(key=lambda x: x['distance'])
+        return nearby_places
+    
+    def correlate_photos_to_locations(self, data_dir: Path, output_dir: Path) -> bool:
+        """Main processing function to correlate photos with regions and places"""
+        try:
+            # Load all required data
+            regional_data, saved_data, photo_data = self.load_existing_data(data_dir)
+            
+            if not regional_data.get('regions'):
+                logger.error("No regional centers data found")
+                return False
+            
+            if not photo_data.get('photos'):
+                logger.error("No photo metadata found")
+                return False
+            
+            logger.info(f"Processing {len(photo_data['photos'])} photos against {len(regional_data['regions'])} regions")
+            
+            # Get geotagged photos only
+            geotagged_photos = [p for p in photo_data['photos'] if p.get('has_geolocation')]
+            places_list = saved_data.get('places', [])
+            
+            logger.info(f"Found {len(geotagged_photos)} geotagged photos and {len(places_list)} saved/labeled places")
+            
+            # Process photos
+            region_groups = {}
+            unmatched_photos = []
+            
+            for i, photo in enumerate(geotagged_photos):
+                if i % 5 == 0 and i > 0:
+                    logger.info(f"Processing photo {i+1}/{len(geotagged_photos)} ({(i+1)/len(geotagged_photos)*100:.1f}%)")
+                
+                coords = photo.get('coordinates', {})
+                if not coords:
+                    continue
+                
+                photo_lat = coords.get('latitude')
+                photo_lon = coords.get('longitude')
+                
+                if photo_lat is None or photo_lon is None:
+                    continue
+                
+                # Find nearest region
+                nearest_region, distance_to_region = self.find_nearest_region(
+                    photo_lat, photo_lon, regional_data['regions']
+                )
+                
+                # Find nearby places
+                nearby_places = self.find_nearest_places(photo_lat, photo_lon, places_list)
+                
+                photo_location_data = {
+                    'filename': photo.get('filename'),
+                    'timestamp': photo.get('timestamp'),
+                    'coordinates': coords,
+                    'distance_to_center': distance_to_region,
+                    'nearby_places': nearby_places,
+                    'nearest_place': nearby_places[0] if nearby_places else None
+                }
+                
+                if nearest_region:
+                    if nearest_region not in region_groups:
+                        region_groups[nearest_region] = []
+                    region_groups[nearest_region].append(photo_location_data)
+                else:
+                    unmatched_photos.append(photo_location_data)
+            
+            # Sort photos within each region by timestamp
+            for region_photos in region_groups.values():
+                region_photos.sort(key=lambda x: x.get('timestamp', ''))
+            
+            # Calculate statistics per region
+            region_summaries = {}
+            for region_name, photos in region_groups.items():
+                timestamps = [p.get('timestamp') for p in photos if p.get('timestamp')]
+                date_range = {}
+                if timestamps:
+                    timestamps.sort()
+                    date_range = {
+                        'first_photo': timestamps[0],
+                        'last_photo': timestamps[-1]
+                    }
+                
+                region_summaries[region_name] = {
+                    'photo_count': len(photos),
+                    'date_range': date_range,
+                    'photos': photos
+                }
+            
+            # Prepare output
+            output_dir.mkdir(exist_ok=True)
+            
+            photo_locations_output = {
+                'metadata': {
+                    'processing_date': datetime.now(UTC).isoformat(),
+                    'total_photos_processed': len(geotagged_photos),
+                    'photos_matched_to_regions': sum(len(photos) for photos in region_groups.values()),
+                    'unmatched_photos': len(unmatched_photos),
+                    'total_regions_with_photos': len(region_groups),
+                    'region_distance_threshold_miles': self.region_distance_threshold_miles,
+                    'place_distance_threshold_miles': self.place_distance_threshold_miles
+                },
+                'regions': region_summaries,
+                'unmatched_photos': unmatched_photos
+            }
+            
+            with open(output_dir / 'photo_locations.json', 'w') as f:
+                json.dump(photo_locations_output, f, indent=2)
+            
+            logger.info(f"Successfully correlated {len(geotagged_photos)} photos")
+            logger.info(f"Matched {sum(len(photos) for photos in region_groups.values())} photos to {len(region_groups)} regions")
+            logger.info(f"Found {len(unmatched_photos)} unmatched photos")
+            logger.info(f"Output written to {output_dir / 'photo_locations.json'}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error correlating photos to locations: {e}")
+            return False
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__.strip())
@@ -563,6 +930,30 @@ def main():
 
         extractor = SavedPlacesExtractor()
         success = extractor.process_saved_places(input_file, output_dir)
+        sys.exit(0 if success else 1)
+
+    elif command == "extract-photo-metadata":
+        photos_dir = Path("takeout/maps/saved/Photos and videos")
+        output_dir = Path("data")
+
+        if not photos_dir.exists():
+            logger.error(f"Photos directory not found: {photos_dir}")
+            sys.exit(1)
+
+        extractor = PhotoMetadataExtractor()
+        success = extractor.process_photo_metadata(photos_dir, output_dir)
+        sys.exit(0 if success else 1)
+
+    elif command == "correlate-photos-to-regions":
+        data_dir = Path("data")
+        output_dir = Path("data")
+
+        if not data_dir.exists():
+            logger.error(f"Data directory not found: {data_dir}")
+            sys.exit(1)
+
+        correlator = PhotoLocationCorrelator()
+        success = correlator.correlate_photos_to_locations(data_dir, output_dir)
         sys.exit(0 if success else 1)
 
     else:
