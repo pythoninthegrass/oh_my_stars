@@ -24,6 +24,9 @@ Commands:
     correlate-photos-to-regions: Match geotagged photos to regions and saved places
     extract-review-visits: Extract review timestamps as visit confirmations
     generate-visit-timeline: Generate comprehensive visit timeline from all data sources
+    generate-summary-report: Generate human-readable markdown summary report
+    cache-stats: Display geocoding cache statistics and clean expired entries
+    cache-clear: Clear all geocoding cache entries
 """
 
 import json
@@ -44,34 +47,256 @@ logger = logging.getLogger(__name__)
 
 
 class GeocodingCache:
-    """Simple file-based cache for geocoding results"""
+    """Comprehensive file-based cache for geocoding results with rate limiting and expiration"""
 
-    def __init__(self, cache_file: Path = Path("data/geocoding_cache.json")):
+    def __init__(self, cache_file: Path = Path("data/geocoding_cache.json"), expiration_days: int = 30):
         self.cache_file = cache_file
-        self.cache = self._load_cache()
+        self.expiration_days = expiration_days
+        self.last_api_call = 0  # Timestamp of last API call for rate limiting
+        self.min_api_interval = 1.0  # Minimum seconds between API calls
+        self.cache_data = self._load_cache()
+        self.session_hits = 0
+        self.session_misses = 0
 
-    def _load_cache(self) -> dict[str, str]:
+    def _load_cache(self) -> dict:
+        """Load cache from file with proper structure"""
         if self.cache_file.exists():
             try:
                 with open(self.cache_file) as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    # Ensure proper structure
+                    if 'metadata' not in data:
+                        data = self._migrate_old_cache(data)
+                    return data
             except (json.JSONDecodeError, FileNotFoundError):
                 logger.warning("Could not load geocoding cache, starting fresh")
-        return {}
+        
+        # Return empty cache with proper structure
+        return {
+            'metadata': {
+                'version': '1.0',
+                'created': datetime.now(UTC).isoformat(),
+                'last_updated': datetime.now(UTC).isoformat(),
+                'total_entries': 0,
+                'cache_hits': 0,
+                'cache_misses': 0,
+                'expiration_days': self.expiration_days
+            },
+            'entries': {}
+        }
+
+    def _migrate_old_cache(self, old_cache: dict) -> dict:
+        """Migrate old simple cache format to new structure"""
+        logger.info("Migrating old cache format to new structure")
+        new_cache = {
+            'metadata': {
+                'version': '1.0',
+                'created': datetime.now(UTC).isoformat(),
+                'last_updated': datetime.now(UTC).isoformat(),
+                'total_entries': len(old_cache),
+                'cache_hits': 0,
+                'cache_misses': 0,
+                'expiration_days': self.expiration_days
+            },
+            'entries': {}
+        }
+        
+        # Convert old entries to new format
+        for key, city in old_cache.items():
+            if isinstance(city, str):  # Skip metadata entries
+                new_cache['entries'][f"reverse_{key}"] = {
+                    'timestamp': datetime.now(UTC).isoformat(),
+                    'query_type': 'reverse',
+                    'query': self._parse_coordinates_from_key(key),
+                    'response': {'city': city}
+                }
+        
+        return new_cache
+
+    def _parse_coordinates_from_key(self, key: str) -> dict:
+        """Parse coordinates from old cache key format"""
+        try:
+            lat_str, lon_str = key.split(',')
+            return {
+                'latitude': float(lat_str),
+                'longitude': float(lon_str)
+            }
+        except (ValueError, IndexError):
+            return {'latitude': 0.0, 'longitude': 0.0}
+
+    def _generate_cache_key(self, query_type: str, **kwargs) -> str:
+        """Generate cache key for different query types"""
+        if query_type == 'reverse':
+            lat = kwargs.get('latitude', 0)
+            lon = kwargs.get('longitude', 0)
+            return f"reverse_{lat:.6f}_{lon:.6f}"
+        elif query_type == 'forward':
+            address = kwargs.get('address', '')
+            # Normalize address for consistent keys
+            normalized = address.lower().strip().replace(' ', '_')
+            return f"forward_{normalized}"
+        else:
+            raise ValueError(f"Unknown query type: {query_type}")
+
+    def _is_expired(self, entry: dict) -> bool:
+        """Check if cache entry has expired"""
+        try:
+            entry_time = parse_date(entry['timestamp'])
+            now = datetime.now(UTC)
+            age_days = (now - entry_time).days
+            return age_days > self.expiration_days
+        except Exception:
+            return True  # Consider invalid timestamps as expired
 
     def get(self, coordinates: tuple[float, float]) -> str | None:
-        key = f"{coordinates[0]:.6f},{coordinates[1]:.6f}"
-        return self.cache.get(key)
+        """Get cached reverse geocoding result"""
+        key = self._generate_cache_key('reverse', latitude=coordinates[0], longitude=coordinates[1])
+        entry = self.cache_data['entries'].get(key)
+        
+        if entry and not self._is_expired(entry):
+            self.session_hits += 1
+            self.cache_data['metadata']['cache_hits'] += 1
+            response = entry.get('response', {})
+            return response.get('city')
+        
+        # Cache miss or expired
+        self.session_misses += 1
+        self.cache_data['metadata']['cache_misses'] += 1
+        
+        # Clean up expired entry
+        if entry and self._is_expired(entry):
+            del self.cache_data['entries'][key]
+            self.cache_data['metadata']['total_entries'] -= 1
+        
+        return None
 
-    def set(self, coordinates: tuple[float, float], city: str):
-        key = f"{coordinates[0]:.6f},{coordinates[1]:.6f}"
-        self.cache[key] = city
+    def set(self, coordinates: tuple[float, float], city: str, full_response: dict = None):
+        """Set cached reverse geocoding result"""
+        key = self._generate_cache_key('reverse', latitude=coordinates[0], longitude=coordinates[1])
+        
+        entry = {
+            'timestamp': datetime.now(UTC).isoformat(),
+            'query_type': 'reverse',
+            'query': {
+                'latitude': coordinates[0],
+                'longitude': coordinates[1]
+            },
+            'response': full_response or {'city': city}
+        }
+        
+        # Add new entry
+        if key not in self.cache_data['entries']:
+            self.cache_data['metadata']['total_entries'] += 1
+        
+        self.cache_data['entries'][key] = entry
+        self.cache_data['metadata']['last_updated'] = datetime.now(UTC).isoformat()
         self._save_cache()
 
+    def get_forward(self, address: str) -> dict | None:
+        """Get cached forward geocoding result"""
+        key = self._generate_cache_key('forward', address=address)
+        entry = self.cache_data['entries'].get(key)
+        
+        if entry and not self._is_expired(entry):
+            self.session_hits += 1
+            self.cache_data['metadata']['cache_hits'] += 1
+            return entry.get('response')
+        
+        # Cache miss or expired
+        self.session_misses += 1
+        self.cache_data['metadata']['cache_misses'] += 1
+        
+        # Clean up expired entry
+        if entry and self._is_expired(entry):
+            del self.cache_data['entries'][key]
+            self.cache_data['metadata']['total_entries'] -= 1
+        
+        return None
+
+    def set_forward(self, address: str, response: dict):
+        """Set cached forward geocoding result"""
+        key = self._generate_cache_key('forward', address=address)
+        
+        entry = {
+            'timestamp': datetime.now(UTC).isoformat(),
+            'query_type': 'forward',
+            'query': {'address': address},
+            'response': response
+        }
+        
+        # Add new entry
+        if key not in self.cache_data['entries']:
+            self.cache_data['metadata']['total_entries'] += 1
+        
+        self.cache_data['entries'][key] = entry
+        self.cache_data['metadata']['last_updated'] = datetime.now(UTC).isoformat()
+        self._save_cache()
+
+    def enforce_rate_limit(self):
+        """Enforce rate limiting for API calls (1 request per second)"""
+        current_time = time.time()
+        time_since_last = current_time - self.last_api_call
+        
+        if time_since_last < self.min_api_interval:
+            sleep_time = self.min_api_interval - time_since_last
+            logger.debug(f"Rate limiting: sleeping {sleep_time:.2f} seconds")
+            time.sleep(sleep_time)
+        
+        self.last_api_call = time.time()
+
+    def clean_expired(self) -> int:
+        """Remove expired entries from cache"""
+        expired_keys = []
+        
+        for key, entry in self.cache_data['entries'].items():
+            if self._is_expired(entry):
+                expired_keys.append(key)
+        
+        for key in expired_keys:
+            del self.cache_data['entries'][key]
+        
+        if expired_keys:
+            self.cache_data['metadata']['total_entries'] -= len(expired_keys)
+            self.cache_data['metadata']['last_updated'] = datetime.now(UTC).isoformat()
+            self._save_cache()
+            logger.info(f"Cleaned {len(expired_keys)} expired cache entries")
+        
+        return len(expired_keys)
+
+    def clear(self):
+        """Clear all cache entries"""
+        entry_count = len(self.cache_data['entries'])
+        self.cache_data['entries'] = {}
+        self.cache_data['metadata']['total_entries'] = 0
+        self.cache_data['metadata']['last_updated'] = datetime.now(UTC).isoformat()
+        self._save_cache()
+        logger.info(f"Cleared {entry_count} cache entries")
+
+    def get_stats(self) -> dict:
+        """Get cache statistics"""
+        total_hits = self.cache_data['metadata']['cache_hits'] + self.session_hits
+        total_misses = self.cache_data['metadata']['cache_misses'] + self.session_misses
+        total_requests = total_hits + total_misses
+        
+        hit_ratio = (total_hits / total_requests * 100) if total_requests > 0 else 0
+        
+        return {
+            'total_entries': self.cache_data['metadata']['total_entries'],
+            'cache_hits': total_hits,
+            'cache_misses': total_misses,
+            'hit_ratio_percent': round(hit_ratio, 1),
+            'session_hits': self.session_hits,
+            'session_misses': self.session_misses,
+            'expiration_days': self.expiration_days,
+            'created': self.cache_data['metadata']['created'],
+            'last_updated': self.cache_data['metadata']['last_updated']
+        }
+
     def _save_cache(self):
+        """Save cache to file"""
         self.cache_file.parent.mkdir(exist_ok=True)
         with open(self.cache_file, 'w') as f:
-            json.dump(self.cache, f, indent=2)
+            json.dump(self.cache_data, f, indent=2)
 
 
 class LabeledPlacesExtractor:
@@ -114,7 +339,7 @@ class LabeledPlacesExtractor:
         return None
 
     def reverse_geocode_city(self, lat: float, lon: float) -> str | None:
-        """Get city name from coordinates using Nominatim"""
+        """Get city name from coordinates using Nominatim with enhanced caching"""
         coordinates = (lat, lon)
 
         # Check cache first
@@ -123,8 +348,8 @@ class LabeledPlacesExtractor:
             return cached_city
 
         try:
-            # Respect rate limits
-            time.sleep(1)
+            # Enforce rate limiting
+            self.cache.enforce_rate_limit()
 
             location = self.geocoder.reverse((lat, lon), exactly_one=True, language='en')
             if location and location.raw.get('address'):
@@ -141,7 +366,8 @@ class LabeledPlacesExtractor:
                     else:
                         city_key = city
 
-                    self.cache.set(coordinates, city_key)
+                    # Store full response in cache
+                    self.cache.set(coordinates, city_key, address)
                     return city_key
 
         except (GeocoderTimedOut, GeocoderUnavailable) as e:
@@ -298,7 +524,7 @@ class SavedPlacesExtractor:
         return None
 
     def reverse_geocode_city(self, lat: float, lon: float) -> str | None:
-        """Get city name from coordinates using Nominatim"""
+        """Get city name from coordinates using Nominatim with enhanced caching"""
         coordinates = (lat, lon)
 
         # Check cache first
@@ -307,8 +533,8 @@ class SavedPlacesExtractor:
             return cached_city
 
         try:
-            # Respect rate limits
-            time.sleep(1)
+            # Enforce rate limiting
+            self.cache.enforce_rate_limit()
 
             location = self.geocoder.reverse((lat, lon), exactly_one=True, language='en')
             if location and location.raw.get('address'):
@@ -325,7 +551,8 @@ class SavedPlacesExtractor:
                     else:
                         city_key = city
 
-                    self.cache.set(coordinates, city_key)
+                    # Store full response in cache
+                    self.cache.set(coordinates, city_key, address)
                     return city_key
 
         except (GeocoderTimedOut, GeocoderUnavailable) as e:
@@ -1507,6 +1734,349 @@ class VisitTimelineGenerator:
             return False
 
 
+class SummaryReportGenerator:
+    """Generate human-readable markdown summary report from all analyzed data"""
+    
+    def __init__(self):
+        self.report_lines = []
+    
+    def load_all_data(self, data_dir: Path) -> tuple[dict, dict, dict, dict, dict]:
+        """Load all processed data sources"""
+        visit_timeline = {}
+        regional_centers = {}
+        saved_places = {}
+        photo_locations = {}
+        review_visits = {}
+        
+        # Load visit timeline (main source)
+        timeline_file = data_dir / 'visit_timeline.json'
+        if timeline_file.exists():
+            with open(timeline_file) as f:
+                visit_timeline = json.load(f)
+        
+        # Load regional centers
+        regional_file = data_dir / 'regional_centers.json'
+        if regional_file.exists():
+            with open(regional_file) as f:
+                regional_centers = json.load(f)
+        
+        # Load saved places
+        saved_file = data_dir / 'saved_places.json'
+        if saved_file.exists():
+            with open(saved_file) as f:
+                saved_places = json.load(f)
+        
+        # Load photo locations
+        photo_file = data_dir / 'photo_locations.json'
+        if photo_file.exists():
+            with open(photo_file) as f:
+                photo_locations = json.load(f)
+        
+        # Load review visits
+        review_file = data_dir / 'review_visits.json'
+        if review_file.exists():
+            with open(review_file) as f:
+                review_visits = json.load(f)
+        
+        return visit_timeline, regional_centers, saved_places, photo_locations, review_visits
+    
+    def generate_header_section(self, timeline_data: dict) -> None:
+        """Generate report header with metadata and overview"""
+        metadata = timeline_data.get('metadata', {})
+        date_range = metadata.get('date_range', {})
+        rankings = timeline_data.get('rankings', {})
+        
+        generation_date = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')
+        
+        self.report_lines.extend([
+            "# Google Maps Travel Analysis Report",
+            "",
+            f"**Generated:** {generation_date}",
+            f"**Data Source:** Google Takeout Maps Export",
+            f"**Analysis Period:** {date_range.get('first_visit', 'N/A')[:10]} to {date_range.get('last_visit', 'N/A')[:10]}",
+            "",
+            "## Table of Contents",
+            "",
+            "- [Overview](#overview)",
+            "- [Regional Visit Summary](#regional-visit-summary)",
+            "- [Travel Timeline](#travel-timeline)",
+            "- [Travel Insights](#travel-insights)",
+            "- [Data Sources](#data-sources)",
+            "",
+            "## Overview",
+            "",
+            f"- **Total Regions Visited:** {metadata.get('total_regions', 0)}",
+            f"- **Total Recorded Visits:** {metadata.get('total_visits', 0)}",
+            f"- **Photo Visits:** {metadata.get('data_sources', {}).get('photo_visits', 0)}",
+            f"- **Review Visits:** {metadata.get('data_sources', {}).get('review_visits', 0)}",
+            f"- **Saved Place Visits:** {metadata.get('data_sources', {}).get('saved_place_visits', 0)}",
+        ])
+        
+        # Add top region if available
+        top_regions = rankings.get('most_visited_regions', [])
+        if top_regions:
+            top_region, top_visits = top_regions[0]
+            self.report_lines.append(f"- **Most Visited Region:** {top_region} ({top_visits} visits)")
+        
+        self.report_lines.append("")
+    
+    def calculate_days_since_last_visit(self, last_visit_str: str) -> int:
+        """Calculate days since last visit"""
+        try:
+            last_visit = parse_date(last_visit_str)
+            now = datetime.now(UTC)
+            return (now - last_visit).days
+        except Exception:
+            return -1
+    
+    def count_photos_and_places_for_region(self, region_name: str, photo_data: dict, saved_data: dict) -> tuple[int, int]:
+        """Count photos and saved places for a region"""
+        photo_count = 0
+        place_count = 0
+        
+        # Count photos from photo locations data
+        region_photos = photo_data.get('regions', {}).get(region_name, {}).get('photos', [])
+        photo_count = len(region_photos)
+        
+        # Count saved places for this region
+        saved_places = saved_data.get('places', [])
+        place_count = sum(1 for place in saved_places if place.get('region') == region_name)
+        
+        return photo_count, place_count
+    
+    def generate_regional_summary_section(self, timeline_data: dict, photo_data: dict, saved_data: dict) -> None:
+        """Generate regional visit summary table"""
+        regions = timeline_data.get('regions', {})
+        
+        self.report_lines.extend([
+            "## Regional Visit Summary",
+            "",
+            "| Region | Visits | First Visit | Last Visit | Days Since | Photos | Places |",
+            "|--------|--------|-------------|------------|------------|--------|--------|"
+        ])
+        
+        # Sort regions by visit count (descending)
+        sorted_regions = sorted(
+            regions.items(),
+            key=lambda x: x[1].get('visit_count', 0),
+            reverse=True
+        )
+        
+        for region_name, region_info in sorted_regions[:25]:  # Top 25 regions
+            visits = region_info.get('visit_count', 0)
+            first_visit = region_info.get('first_visit', 'N/A')[:10] if region_info.get('first_visit') else 'N/A'
+            last_visit = region_info.get('last_visit', 'N/A')[:10] if region_info.get('last_visit') else 'N/A'
+            
+            days_since = self.calculate_days_since_last_visit(region_info.get('last_visit', ''))
+            days_since_str = str(days_since) if days_since >= 0 else 'N/A'
+            
+            photo_count, place_count = self.count_photos_and_places_for_region(region_name, photo_data, saved_data)
+            
+            self.report_lines.append(
+                f"| {region_name} | {visits} | {first_visit} | {last_visit} | {days_since_str} | {photo_count} | {place_count} |"
+            )
+        
+        self.report_lines.append("")
+    
+    def generate_timeline_section(self, timeline_data: dict) -> None:
+        """Generate visual timeline representations"""
+        regions = timeline_data.get('regions', {})
+        
+        self.report_lines.extend([
+            "## Travel Timeline",
+            "",
+            "### Visit Activity by Year",
+            ""
+        ])
+        
+        # Aggregate visits by year across all regions
+        year_totals = {}
+        for region_info in regions.values():
+            visits_by_year = region_info.get('visits_by_year', {})
+            for year, count in visits_by_year.items():
+                year_totals[year] = year_totals.get(year, 0) + count
+        
+        # Create ASCII chart for yearly visits
+        if year_totals:
+            max_visits = max(year_totals.values())
+            scale_factor = 50 / max_visits if max_visits > 0 else 1
+            
+            self.report_lines.append("```")
+            for year in sorted(year_totals.keys()):
+                visits = year_totals[year]
+                bar_length = max(1, int(visits * scale_factor))
+                bar = "█" * bar_length
+                self.report_lines.append(f"{year}: {bar} ({visits} visits)")
+            self.report_lines.extend(["```", ""])
+        
+        # Top 10 most visited regions timeline
+        sorted_regions = sorted(
+            regions.items(),
+            key=lambda x: x[1].get('visit_count', 0),
+            reverse=True
+        )
+        
+        self.report_lines.extend([
+            "### Top 10 Most Visited Regions",
+            ""
+        ])
+        
+        for i, (region_name, region_info) in enumerate(sorted_regions[:10]):
+            visits = region_info.get('visit_count', 0)
+            first_visit = region_info.get('first_visit', 'N/A')[:10] if region_info.get('first_visit') else 'N/A'
+            last_visit = region_info.get('last_visit', 'N/A')[:10] if region_info.get('last_visit') else 'N/A'
+            avg_days = region_info.get('avg_days_between_visits', 0)
+            
+            intensity_emoji = "🔥" if visits > 50 else "⭐" if visits > 20 else "📍"
+            
+            self.report_lines.extend([
+                f"**{i+1}. {region_name}** {intensity_emoji}",
+                f"- **{visits} visits** | First: {first_visit} | Last: {last_visit}",
+                f"- Average {avg_days} days between visits",
+                ""
+            ])
+    
+    def generate_insights_section(self, timeline_data: dict) -> None:
+        """Generate travel insights and patterns"""
+        regions = timeline_data.get('regions', {})
+        metadata = timeline_data.get('metadata', {})
+        
+        self.report_lines.extend([
+            "## Travel Insights",
+            ""
+        ])
+        
+        # Recent vs old regions
+        recent_regions = []
+        old_regions = []
+        now = datetime.now(UTC)
+        
+        for region_name, region_info in regions.items():
+            last_visit_str = region_info.get('last_visit')
+            if last_visit_str:
+                try:
+                    last_visit = parse_date(last_visit_str)
+                    days_since = (now - last_visit).days
+                    if days_since > 365:
+                        old_regions.append((region_name, days_since))
+                    elif days_since <= 90:
+                        recent_regions.append((region_name, days_since))
+                except Exception:
+                    continue
+        
+        # Sort by recency
+        recent_regions.sort(key=lambda x: x[1])
+        old_regions.sort(key=lambda x: x[1], reverse=True)
+        
+        self.report_lines.extend([
+            "### Recent Travel Activity (Last 90 Days)",
+            ""
+        ])
+        
+        if recent_regions:
+            for region, days_ago in recent_regions[:10]:
+                self.report_lines.append(f"- **{region}** - {days_ago} days ago")
+        else:
+            self.report_lines.append("- No recent travel activity recorded")
+        
+        self.report_lines.extend([
+            "",
+            "### Regions Not Visited in Over 1 Year",
+            ""
+        ])
+        
+        if old_regions:
+            for region, days_ago in old_regions[:15]:
+                years_ago = round(days_ago / 365.25, 1)
+                self.report_lines.append(f"- **{region}** - {years_ago} years ago")
+        else:
+            self.report_lines.append("- All regions visited within the last year")
+        
+        # Travel frequency patterns
+        total_visits = metadata.get('total_visits', 0)
+        total_regions = metadata.get('total_regions', 0)
+        
+        if total_regions > 0:
+            avg_visits_per_region = round(total_visits / total_regions, 1)
+            
+            self.report_lines.extend([
+                "",
+                "### Travel Patterns",
+                "",
+                f"- **Average visits per region:** {avg_visits_per_region}",
+                f"- **Total unique destinations:** {total_regions}",
+                f"- **Total recorded visits:** {total_visits}"
+            ])
+    
+    def generate_data_sources_section(self, metadata: dict) -> None:
+        """Generate data sources and methodology section"""
+        data_sources = metadata.get('data_sources', {})
+        
+        self.report_lines.extend([
+            "",
+            "## Data Sources",
+            "",
+            "This report was generated from Google Takeout Maps data including:",
+            "",
+            f"- **{data_sources.get('photo_visits', 0)} photo visits** - Extracted from geotagged photo metadata",
+            f"- **{data_sources.get('review_visits', 0)} review visits** - Based on Google Maps review timestamps",
+            f"- **{data_sources.get('saved_place_visits', 0)} saved place visits** - From bookmarked locations with save dates",
+            "",
+            "### Processing Notes",
+            "",
+            "- Visits within 24 hours to the same region are deduplicated",
+            "- Epoch time timestamps (1970-01-01) are filtered out as system artifacts",
+            "- Geographic clustering groups nearby locations into regions",
+            "- Distance calculations use geodesic (great circle) measurements",
+            "",
+            "### Data Files",
+            "",
+            "- [`visit_timeline.json`](visit_timeline.json) - Complete visit timeline data",
+            "- [`regional_centers.json`](regional_centers.json) - Regional clustering results",
+            "- [`saved_places.json`](saved_places.json) - Processed saved places",
+            "- [`photo_locations.json`](photo_locations.json) - Photo geolocation correlations",
+            "- [`review_visits.json`](review_visits.json) - Review visit confirmations",
+            "",
+            f"**Report Generated:** {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+            ""
+        ])
+    
+    def generate_report(self, data_dir: Path, output_dir: Path) -> bool:
+        """Main processing function to generate summary report"""
+        try:
+            # Load all data
+            timeline_data, regional_data, saved_data, photo_data, review_data = self.load_all_data(data_dir)
+            
+            if not timeline_data.get('regions'):
+                logger.error("No timeline data found")
+                return False
+            
+            logger.info("Generating summary report sections...")
+            
+            # Generate each section
+            self.generate_header_section(timeline_data)
+            self.generate_regional_summary_section(timeline_data, photo_data, saved_data)
+            self.generate_timeline_section(timeline_data)
+            self.generate_insights_section(timeline_data)
+            self.generate_data_sources_section(timeline_data.get('metadata', {}))
+            
+            # Write output
+            output_dir.mkdir(exist_ok=True)
+            
+            with open(output_dir / 'summary_report.md', 'w') as f:
+                f.write('\n'.join(self.report_lines))
+            
+            logger.info(f"Successfully generated summary report with {len(self.report_lines)} lines")
+            logger.info(f"Report covers {len(timeline_data.get('regions', {}))} regions")
+            logger.info(f"Output written to {output_dir / 'summary_report.md'}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error generating summary report: {e}")
+            return False
+
+
 def main():
     if len(sys.argv) < 2:
         print(__doc__.strip())
@@ -1591,6 +2161,46 @@ def main():
         generator = VisitTimelineGenerator()
         success = generator.generate_timeline(data_dir, output_dir)
         sys.exit(0 if success else 1)
+
+    elif command == "generate-summary-report":
+        data_dir = Path("data")
+        output_dir = Path("data")
+
+        if not data_dir.exists():
+            logger.error(f"Data directory not found: {data_dir}")
+            sys.exit(1)
+
+        generator = SummaryReportGenerator()
+        success = generator.generate_report(data_dir, output_dir)
+        sys.exit(0 if success else 1)
+
+    elif command == "cache-stats":
+        cache = GeocodingCache()
+        stats = cache.get_stats()
+        
+        print("\n=== Geocoding Cache Statistics ===")
+        print(f"Total entries: {stats['total_entries']}")
+        print(f"Cache hits: {stats['cache_hits']}")
+        print(f"Cache misses: {stats['cache_misses']}")
+        print(f"Hit ratio: {stats['hit_ratio_percent']}%")
+        print(f"Session hits: {stats['session_hits']}")
+        print(f"Session misses: {stats['session_misses']}")
+        print(f"Expiration: {stats['expiration_days']} days")
+        print(f"Created: {stats['created']}")
+        print(f"Last updated: {stats['last_updated']}")
+        
+        # Clean expired entries
+        expired_count = cache.clean_expired()
+        if expired_count > 0:
+            print(f"Cleaned {expired_count} expired entries")
+        
+        sys.exit(0)
+
+    elif command == "cache-clear":
+        cache = GeocodingCache()
+        cache.clear()
+        print("Cache cleared successfully")
+        sys.exit(0)
 
     else:
         print(__doc__.strip())
