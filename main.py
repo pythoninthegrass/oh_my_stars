@@ -3,72 +3,278 @@
 # /// script
 # requires-python = ">=3.13"
 # dependencies = [
-#     "python-decouple>=3.8",
-#     "sh>=2.2.2",
+#     "geopy>=2.4.1",
+#     "httpx>=0.26.0",
 # ]
 # [tool.uv]
 # exclude-newer = "2025-08-31T00:00:00Z"
 # ///
 
-# pyright: reportMissingImports=false
-
 """
+Oh My Stars - Google Takeout Maps Data Processor
+
 Usage:
-    hello <get|ls|env|greet>
+    main.py extract-labeled-places
 
-Args:
-    get: Make a GET request to GitHub API
-    ls: List files in current directory
-    env: Show environment variable
-    greet: Show welcome message
-
-Note:
-    Demo for uv's PEP 723 script support with various dependencies.
-
-    Dependencies get cached in `uv cache dir`
-    e.g., ~/Library/Caches/uv/environments-v2/hello-8969d74899f61209
+Commands:
+    extract-labeled-places: Extract and group starred/labeled places by region
 """
 
-import httpx
+import json
+import logging
+import ssl
 import sys
+import time
+from datetime import UTC, datetime, timezone
+from geopy.distance import geodesic
+from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
+from geopy.geocoders import Nominatim
 from pathlib import Path
-from sh import ErrorReturnCode, ls
+from typing import Optional
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+
+class GeocodingCache:
+    """Simple file-based cache for geocoding results"""
+
+    def __init__(self, cache_file: Path = Path("data/geocoding_cache.json")):
+        self.cache_file = cache_file
+        self.cache = self._load_cache()
+
+    def _load_cache(self) -> dict[str, str]:
+        if self.cache_file.exists():
+            try:
+                with open(self.cache_file) as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                logger.warning("Could not load geocoding cache, starting fresh")
+        return {}
+
+    def get(self, coordinates: tuple[float, float]) -> str | None:
+        key = f"{coordinates[0]:.6f},{coordinates[1]:.6f}"
+        return self.cache.get(key)
+
+    def set(self, coordinates: tuple[float, float], city: str):
+        key = f"{coordinates[0]:.6f},{coordinates[1]:.6f}"
+        self.cache[key] = city
+        self._save_cache()
+
+    def _save_cache(self):
+        self.cache_file.parent.mkdir(exist_ok=True)
+        with open(self.cache_file, 'w') as f:
+            json.dump(self.cache, f, indent=2)
+
+
+class LabeledPlacesExtractor:
+    """Extract and process labeled places from Google Takeout data"""
+
+    def __init__(self):
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        self.geocoder = Nominatim(user_agent="oh-my-stars/1.0", ssl_context=ssl_context)
+        self.cache = GeocodingCache()
+
+    def extract_city_from_address(self, address: str) -> str | None:
+        """Extract city from address string"""
+        if not address:
+            return None
+
+        parts = [part.strip() for part in address.split(',')]
+
+        # TODO: switch to case statement
+        # Look for patterns like "City, State" or "City, State ZIP"
+        for part in parts:
+            # Skip if it looks like a street address
+            if any(indicator in part.lower() for indicator in ['st', 'ave', 'rd', 'dr', 'blvd', 'way', 'place', 'pl']):
+                continue
+            # Skip ZIP codes
+            if part.replace(' ', '').replace('-', '').isdigit():
+                continue
+            # Skip country names
+            if part.upper() in ['USA', 'US', 'UNITED STATES']:
+                continue
+            # Skip state abbreviations (this is simplified)
+            if len(part) == 2 and part.isupper():
+                continue
+
+            # This might be a city
+            if len(part) > 2 and not part.replace(' ', '').isdigit():
+                return part
+
+        return None
+
+    def reverse_geocode_city(self, lat: float, lon: float) -> str | None:
+        """Get city name from coordinates using Nominatim"""
+        coordinates = (lat, lon)
+
+        # Check cache first
+        cached_city = self.cache.get(coordinates)
+        if cached_city:
+            return cached_city
+
+        try:
+            # Respect rate limits
+            time.sleep(1)
+
+            location = self.geocoder.reverse((lat, lon), exactly_one=True, language='en')
+            if location and location.raw.get('address'):
+                address = location.raw['address']
+                city = address.get('city') or address.get('town') or address.get('village') or address.get('municipality')
+
+                if city:
+                    state = address.get('state')
+                    country = address.get('country_code', '').upper()
+                    if state and country:
+                        city_key = f"{city}, {state}, {country}"
+                    elif country:
+                        city_key = f"{city}, {country}"
+                    else:
+                        city_key = city
+
+                    self.cache.set(coordinates, city_key)
+                    return city_key
+
+        except (GeocoderTimedOut, GeocoderUnavailable) as e:
+            logger.warning(f"Geocoding failed for {lat}, {lon}: {e}")
+
+        return None
+
+    def calculate_center_point(self, places: list[dict]) -> tuple[float, float]:
+        """Calculate geographic center of a list of places"""
+        if not places:
+            return 0.0, 0.0
+
+        total_lat = sum(place['latitude'] for place in places)
+        total_lon = sum(place['longitude'] for place in places)
+
+        return total_lat / len(places), total_lon / len(places)
+
+    def process_labeled_places(self, input_file: Path, output_dir: Path) -> bool:
+        """Main processing function"""
+        try:
+            # Load input data
+            with open(input_file) as f:
+                data = json.load(f)
+
+            logger.info(f"Loaded {len(data['features'])} labeled places")
+
+            # Extract places
+            places = []
+            regional_groups = {}
+
+            for i, feature in enumerate(data['features']):
+                try:
+                    # Extract basic info
+                    coords = feature['geometry']['coordinates']
+                    props = feature['properties']
+
+                    place = {
+                        'id': f"place_{i + 1}",
+                        'name': props.get('name', 'Unnamed'),
+                        'longitude': coords[0],
+                        'latitude': coords[1],
+                        'address': props.get('address', ''),
+                    }
+
+                    # Determine city
+                    city = None
+                    if place['address']:
+                        city = self.extract_city_from_address(place['address'])
+
+                    if not city:
+                        logger.info(f"Reverse geocoding for {place['name']}")
+                        city = self.reverse_geocode_city(place['latitude'], place['longitude'])
+
+                    if not city:
+                        city = "Unknown Location"
+                        logger.warning(f"Could not determine city for {place['name']}")
+
+                    place['city'] = city
+                    places.append(place)
+
+                    # Group by region
+                    if city not in regional_groups:
+                        regional_groups[city] = []
+                    regional_groups[city].append(place)
+
+                except Exception as e:
+                    logger.error(f"Error processing feature {i}: {e}")
+                    continue
+
+            # Calculate regional centers
+            regions = {}
+            for city, city_places in regional_groups.items():
+                center_lat, center_lon = self.calculate_center_point(city_places)
+                regions[city] = {
+                    'center': {'latitude': center_lat, 'longitude': center_lon},
+                    'place_count': len(city_places),
+                    'places': [place['id'] for place in city_places],
+                }
+
+            # Prepare output
+            output_dir.mkdir(exist_ok=True)
+
+            # Write labeled places
+            labeled_places_output = {
+                'metadata': {
+                    'extraction_date': datetime.now(UTC).isoformat(),
+                    'total_places': len(places),
+                    'source_file': str(input_file),
+                },
+                'places': places,
+            }
+
+            with open(output_dir / 'labeled_places.json', 'w') as f:
+                json.dump(labeled_places_output, f, indent=2)
+
+            # Write regional centers
+            regional_centers_output = {
+                'metadata': {
+                    'extraction_date': datetime.now(UTC).isoformat(),
+                    'total_places': len(places),
+                    'total_regions': len(regions),
+                },
+                'regions': regions,
+            }
+
+            with open(output_dir / 'regional_centers.json', 'w') as f:
+                json.dump(regional_centers_output, f, indent=2)
+
+            logger.info(f"Successfully processed {len(places)} places into {len(regions)} regions")
+            logger.info(f"Output written to {output_dir}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error processing labeled places: {e}")
+            return False
 
 
 def main():
-    # Use match-case to handle different commands
-    match sys.argv[1] if len(sys.argv) > 1 else "help":
-        case "get":
-            # Make a GET request using httpx
-            response = httpx.get("https://api.github.com")
-            print(f"Response from GitHub API: {response.status_code}")
+    if len(sys.argv) < 2:
+        print(__doc__.strip())
+        return
 
-        case "ls":
-            # Run the ls command using sh
-            try:
-                output = ls("-l")
-                print(f"Output of 'ls -l':\n{output}")
-            except ErrorReturnCode as e:
-                print(f"Error running command: {e}")
+    command = sys.argv[1]
 
-        case "env":
-            # Get an environment variable using decouple
-            env_file = Path.cwd() / '.env'
-            if env_file.exists():
-                from decouple import Config, RepositoryEnv
-                config = Config(RepositoryEnv(env_file))
-                my_var = config("HELLO", default="world")
-            else:
-                from decouple import config
-                my_var = config("HELLO", default="world")
-            print(f"Hello, {my_var}!")
+    # TODO: glob for default filename
+    if command == "extract-labeled-places":
+        input_file = Path("takeout/maps/saved/My labeled places/Labeled places.json")
+        output_dir = Path("data")
 
-        case "greet":
-            # Print a welcome message
-            print("Welcome to the greet script!")
+        if not input_file.exists():
+            logger.error(f"Input file not found: {input_file}")
+            sys.exit(1)
 
-        case _:
-            print(__doc__.strip())
+        extractor = LabeledPlacesExtractor()
+        success = extractor.process_labeled_places(input_file, output_dir)
+        sys.exit(0 if success else 1)
+
+    else:
+        print(__doc__.strip())
 
 
 if __name__ == "__main__":
