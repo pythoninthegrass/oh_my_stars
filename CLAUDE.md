@@ -1,1 +1,2 @@
 - After completing tasks, use project-manager-backlog agent to mark them off
+- When tasks are marked as completed, move to @backlog/completed/ if the project-manager-backlog agent doesn't automatically move the file
