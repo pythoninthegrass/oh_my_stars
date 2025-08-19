@@ -1,0 +1,13 @@
+{
+  "recommendations": [
+    "charliermarsh.ruff",
+    "DavidAnson.vscode-markdownlint",
+    "EditorConfig.EditorConfig",
+    "mechatroner.rainbow-csv",
+    "ms-python.python",
+    "redhat.vscode-yaml",
+    "ryu1kn.partial-diff",
+    "timonwong.shellcheck",
+    "yzhang.markdown-all-in-one"
+  ]
+}

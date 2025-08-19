@@ -1,0 +1,49 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(awk:*)",
+      "Bash(chmod:*)",
+      "Bash(cp:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(mv:*)",
+      "Bash(rg:*)",
+      "Bash(touch:*)",
+      "Bash(ruff:*)",
+      "Bash(pytest:*)",
+      "Bash(python:*)",
+      "Bash(pre-commit:*)",
+      "Bash(uv:*)",
+      "Edit",
+      "Edit(*)",
+      "mcp__ide__getDiagnostics",
+      "WebFetch(domain:*.app)",
+      "WebFetch(domain:*.com)",
+      "WebFetch(domain:*.dev)",
+      "WebFetch(domain:*.edu)",
+      "WebFetch(domain:*.gov)",
+      "WebFetch(domain:*.io)",
+      "WebFetch(domain:*.net)",
+      "WebFetch(domain:*.org)",
+      "WebFetch(domain:*.us)",
+      "Write"
+    ],
+    "deny": ["Bash(git checkout:*)", "Bash(git switch:*)", "Bash(git add:*)"],
+    "defaultMode": "acceptEdits"
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|MultiEdit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git diff --name-only HEAD | xargs -r pre-commit run --files"
+          }
+        ]
+      }
+    ]
+  }
+}
