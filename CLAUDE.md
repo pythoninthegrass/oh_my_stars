@@ -85,12 +85,6 @@ takeout/maps/ → main.py → data/
 
 - `markdownlint -f -c .markdownlint.jsonc <MARKDOWN_FILE>`
 
-### Project Management
-
-- Task tracking in `/backlog/` directory
-- After completing tasks, use project-manager-backlog agent to mark them off
-- Completed tasks move to `@backlog/completed/`
-
 ## Current TODO Items
 
 1. **Golf `main.py` to <1000 LOC** (currently 3,065 lines)
@@ -103,3 +97,27 @@ takeout/maps/ → main.py → data/
 - Uses UV for dependency management with locked versions
 - Non-destructive analysis - safe to run multiple times
 - Generates both structured JSON and human-readable markdown reports
+
+## Project Management
+
+### Backlog Workflow
+
+```bash
+# Create new task
+backlog task create "Task title" -d "Description" --ac "Criteria 1,Criteria 2" -l label1,label2
+
+# List tasks
+backlog task list --plain
+
+# View task details  
+backlog task task-001 --plain
+
+# Edit task status/details
+backlog task edit task-001 -s "In Progress" -a @assignee
+
+# Mark completed
+backlog task edit task-001 -s "Done"
+```
+
+- Use project-manager-backlog agent for task creation and management
+- Completed tasks move to `@backlog/completed/`
