@@ -83,7 +83,7 @@ class GeocodingCache:
                     return data
             except (json.JSONDecodeError, FileNotFoundError):
                 logger.warning("Could not load geocoding cache, starting fresh")
-        
+
         # Return empty cache with proper structure
         return {
             'metadata': {
@@ -113,7 +113,7 @@ class GeocodingCache:
             },
             'entries': {}
         }
-        
+
         # Convert old entries to new format
         for key, city in old_cache.items():
             if isinstance(city, str):  # Skip metadata entries
@@ -123,7 +123,7 @@ class GeocodingCache:
                     'query': self._parse_coordinates_from_key(key),
                     'response': {'city': city}
                 }
-        
+
         return new_cache
 
     def _parse_coordinates_from_key(self, key: str) -> dict:
@@ -165,28 +165,28 @@ class GeocodingCache:
         """Get cached reverse geocoding result"""
         key = self._generate_cache_key('reverse', latitude=coordinates[0], longitude=coordinates[1])
         entry = self.cache_data['entries'].get(key)
-        
+
         if entry and not self._is_expired(entry):
             self.session_hits += 1
             self.cache_data['metadata']['cache_hits'] += 1
             response = entry.get('response', {})
             return response.get('city')
-        
+
         # Cache miss or expired
         self.session_misses += 1
         self.cache_data['metadata']['cache_misses'] += 1
-        
+
         # Clean up expired entry
         if entry and self._is_expired(entry):
             del self.cache_data['entries'][key]
             self.cache_data['metadata']['total_entries'] -= 1
-        
+
         return None
 
     def set(self, coordinates: tuple[float, float], city: str, full_response: dict = None):
         """Set cached reverse geocoding result"""
         key = self._generate_cache_key('reverse', latitude=coordinates[0], longitude=coordinates[1])
-        
+
         entry = {
             'timestamp': datetime.now(UTC).isoformat(),
             'query_type': 'reverse',
@@ -196,11 +196,11 @@ class GeocodingCache:
             },
             'response': full_response or {'city': city}
         }
-        
+
         # Add new entry
         if key not in self.cache_data['entries']:
             self.cache_data['metadata']['total_entries'] += 1
-        
+
         self.cache_data['entries'][key] = entry
         self.cache_data['metadata']['last_updated'] = datetime.now(UTC).isoformat()
         self._save_cache()
@@ -209,38 +209,38 @@ class GeocodingCache:
         """Get cached forward geocoding result"""
         key = self._generate_cache_key('forward', address=address)
         entry = self.cache_data['entries'].get(key)
-        
+
         if entry and not self._is_expired(entry):
             self.session_hits += 1
             self.cache_data['metadata']['cache_hits'] += 1
             return entry.get('response')
-        
+
         # Cache miss or expired
         self.session_misses += 1
         self.cache_data['metadata']['cache_misses'] += 1
-        
+
         # Clean up expired entry
         if entry and self._is_expired(entry):
             del self.cache_data['entries'][key]
             self.cache_data['metadata']['total_entries'] -= 1
-        
+
         return None
 
     def set_forward(self, address: str, response: dict):
         """Set cached forward geocoding result"""
         key = self._generate_cache_key('forward', address=address)
-        
+
         entry = {
             'timestamp': datetime.now(UTC).isoformat(),
             'query_type': 'forward',
             'query': {'address': address},
             'response': response
         }
-        
+
         # Add new entry
         if key not in self.cache_data['entries']:
             self.cache_data['metadata']['total_entries'] += 1
-        
+
         self.cache_data['entries'][key] = entry
         self.cache_data['metadata']['last_updated'] = datetime.now(UTC).isoformat()
         self._save_cache()
@@ -249,31 +249,31 @@ class GeocodingCache:
         """Enforce rate limiting for API calls (1 request per second)"""
         current_time = time.time()
         time_since_last = current_time - self.last_api_call
-        
+
         if time_since_last < self.min_api_interval:
             sleep_time = self.min_api_interval - time_since_last
             logger.debug(f"Rate limiting: sleeping {sleep_time:.2f} seconds")
             time.sleep(sleep_time)
-        
+
         self.last_api_call = time.time()
 
     def clean_expired(self) -> int:
         """Remove expired entries from cache"""
         expired_keys = []
-        
+
         for key, entry in self.cache_data['entries'].items():
             if self._is_expired(entry):
                 expired_keys.append(key)
-        
+
         for key in expired_keys:
             del self.cache_data['entries'][key]
-        
+
         if expired_keys:
             self.cache_data['metadata']['total_entries'] -= len(expired_keys)
             self.cache_data['metadata']['last_updated'] = datetime.now(UTC).isoformat()
             self._save_cache()
             logger.info(f"Cleaned {len(expired_keys)} expired cache entries")
-        
+
         return len(expired_keys)
 
     def clear(self):
@@ -290,9 +290,9 @@ class GeocodingCache:
         total_hits = self.cache_data['metadata']['cache_hits'] + self.session_hits
         total_misses = self.cache_data['metadata']['cache_misses'] + self.session_misses
         total_requests = total_hits + total_misses
-        
+
         hit_ratio = (total_hits / total_requests * 100) if total_requests > 0 else 0
-        
+
         return {
             'total_entries': self.cache_data['metadata']['total_entries'],
             'cache_hits': total_hits,
@@ -779,52 +779,52 @@ class SavedPlacesExtractor:
 
 class PhotoMetadataExtractor:
     """Extract geolocation data from photo metadata JSON files"""
-    
+
     def __init__(self):
         pass
-    
+
     def validate_coordinates(self, lat: float, lon: float) -> bool:
         """Validate coordinate ranges"""
         return -90 <= lat <= 90 and -180 <= lon <= 180
-    
+
     def parse_timestamp_from_epoch(self, timestamp_str: str) -> str | None:
         """Convert epoch timestamp to ISO format"""
         try:
             # Handle both string and integer timestamps
             timestamp = int(timestamp_str)
-            dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            dt = datetime.fromtimestamp(timestamp, tz=UTC)
             return dt.isoformat()
         except Exception as e:
             logger.warning(f"Failed to parse epoch timestamp '{timestamp_str}': {e}")
             return None
-    
+
     def process_photo_metadata(self, photos_dir: Path, output_dir: Path) -> bool:
         """Main processing function for photo metadata"""
         try:
             # Find all JSON metadata files
             json_files = list(photos_dir.glob("*.json"))
-            
+
             if not json_files:
                 logger.error(f"No JSON metadata files found in {photos_dir}")
                 return False
-            
+
             logger.info(f"Found {len(json_files)} metadata files to process")
-            
+
             photos = []
             geotagged_count = 0
             timestamps = []
-            
+
             for i, json_file in enumerate(json_files):
                 if i % 10 == 0 and i > 0:
                     logger.info(f"Processing file {i+1}/{len(json_files)} ({(i+1)/len(json_files)*100:.1f}%)")
-                
+
                 try:
                     with open(json_file) as f:
                         metadata = json.load(f)
-                    
+
                     # Extract filename (remove .json extension)
                     filename = json_file.name[:-5]  # Remove .json
-                    
+
                     photo_data = {
                         'filename': filename,
                         'has_geolocation': False,
@@ -835,7 +835,7 @@ class PhotoMetadataExtractor:
                         'description': metadata.get('description', ''),
                         'image_views': metadata.get('imageViews', '0')
                     }
-                    
+
                     # Extract timestamps
                     if 'photoTakenTime' in metadata:
                         photo_taken_timestamp = metadata['photoTakenTime'].get('timestamp')
@@ -844,7 +844,7 @@ class PhotoMetadataExtractor:
                             photo_data['timestamp'] = photo_data['photo_taken_time']  # Use photo taken time as primary
                             if photo_data['timestamp']:
                                 timestamps.append(photo_data['timestamp'])
-                    
+
                     if 'creationTime' in metadata:
                         creation_timestamp = metadata['creationTime'].get('timestamp')
                         if creation_timestamp:
@@ -854,14 +854,14 @@ class PhotoMetadataExtractor:
                                 photo_data['timestamp'] = photo_data['creation_time']
                                 if photo_data['timestamp']:
                                     timestamps.append(photo_data['timestamp'])
-                    
+
                     # Extract geolocation if available
                     if 'geoDataExif' in metadata:
                         geo_data = metadata['geoDataExif']
-                        
+
                         lat = geo_data.get('latitude')
                         lon = geo_data.get('longitude')
-                        
+
                         if lat is not None and lon is not None:
                             if self.validate_coordinates(lat, lon):
                                 photo_data['has_geolocation'] = True
@@ -873,13 +873,13 @@ class PhotoMetadataExtractor:
                                 geotagged_count += 1
                             else:
                                 logger.warning(f"Invalid coordinates in {filename}: lat={lat}, lon={lon}")
-                    
+
                     photos.append(photo_data)
-                    
+
                 except Exception as e:
                     logger.error(f"Error processing {json_file}: {e}")
                     continue
-            
+
             # Calculate statistics
             total_photos = len(photos)
             date_range = {}
@@ -889,10 +889,10 @@ class PhotoMetadataExtractor:
                     'earliest': timestamps[0],
                     'latest': timestamps[-1]
                 }
-            
+
             # Prepare output
             output_dir.mkdir(exist_ok=True)
-            
+
             photo_metadata_output = {
                 'metadata': {
                     'extraction_date': datetime.now(UTC).isoformat(),
@@ -905,17 +905,17 @@ class PhotoMetadataExtractor:
                 },
                 'photos': photos
             }
-            
+
             with open(output_dir / 'photo_metadata.json', 'w') as f:
                 json.dump(photo_metadata_output, f, indent=2)
-            
+
             logger.info(f"Successfully processed {total_photos} photo metadata files")
             logger.info(f"Found {geotagged_count} geotagged photos ({(geotagged_count/total_photos*100):.1f}%)")
             logger.info(f"Date range: {date_range.get('earliest', 'N/A')} to {date_range.get('latest', 'N/A')}")
             logger.info(f"Output written to {output_dir / 'photo_metadata.json'}")
-            
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Error processing photo metadata: {e}")
             return False
@@ -923,29 +923,29 @@ class PhotoMetadataExtractor:
 
 class PhotoLocationCorrelator:
     """Correlate geotagged photos to regions and saved places"""
-    
+
     def __init__(self):
         self.region_distance_threshold_miles = 10.0
         self.place_distance_threshold_miles = 0.1
-    
+
     def load_existing_data(self, data_dir: Path) -> tuple[dict, dict, dict]:
         """Load regional centers, saved places, and photo metadata"""
         regional_centers = {}
         saved_places = {}
         photo_metadata = {}
-        
+
         # Load regional centers
         regional_file = data_dir / 'regional_centers.json'
         if regional_file.exists():
             with open(regional_file) as f:
                 regional_centers = json.load(f)
-        
+
         # Load saved places
         saved_file = data_dir / 'saved_places.json'
         if saved_file.exists():
             with open(saved_file) as f:
                 saved_places = json.load(f)
-        
+
         # Load labeled places
         labeled_file = data_dir / 'labeled_places.json'
         if labeled_file.exists():
@@ -955,15 +955,15 @@ class PhotoLocationCorrelator:
                 if 'places' not in saved_places:
                     saved_places['places'] = []
                 saved_places['places'].extend(labeled_places.get('places', []))
-        
+
         # Load photo metadata
         photo_file = data_dir / 'photo_metadata.json'
         if photo_file.exists():
             with open(photo_file) as f:
                 photo_metadata = json.load(f)
-        
+
         return regional_centers, saved_places, photo_metadata
-    
+
     def calculate_distance_miles(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         """Calculate distance in miles between two coordinates"""
         try:
@@ -974,44 +974,44 @@ class PhotoLocationCorrelator:
         except Exception as e:
             logger.warning(f"Error calculating distance: {e}")
             return float('inf')
-    
+
     def find_nearest_region(self, photo_lat: float, photo_lon: float, regions: dict) -> tuple[str | None, float]:
         """Find the nearest region within threshold distance"""
         nearest_region = None
         min_distance = float('inf')
-        
+
         for region_name, region_data in regions.items():
             center = region_data.get('center', {})
             if not center:
                 continue
-                
+
             region_lat = center.get('latitude')
             region_lon = center.get('longitude')
-            
+
             if region_lat is None or region_lon is None:
                 continue
-            
+
             distance = self.calculate_distance_miles(photo_lat, photo_lon, region_lat, region_lon)
-            
+
             if distance < min_distance and distance <= self.region_distance_threshold_miles:
                 min_distance = distance
                 nearest_region = region_name
-        
+
         return nearest_region, min_distance if nearest_region else float('inf')
-    
+
     def find_nearest_places(self, photo_lat: float, photo_lon: float, places: list) -> list:
         """Find saved/labeled places within threshold distance"""
         nearby_places = []
-        
+
         for place in places:
             place_lat = place.get('latitude')
             place_lon = place.get('longitude')
-            
+
             if place_lat is None or place_lon is None:
                 continue
-            
+
             distance = self.calculate_distance_miles(photo_lat, photo_lon, place_lat, place_lon)
-            
+
             if distance <= self.place_distance_threshold_miles:
                 nearby_places.append({
                     'name': place.get('name', 'Unknown'),
@@ -1019,59 +1019,59 @@ class PhotoLocationCorrelator:
                     'id': place.get('id', ''),
                     'type': 'labeled' if place.get('id', '').startswith('place_') else 'saved'
                 })
-        
+
         # Sort by distance
         nearby_places.sort(key=lambda x: x['distance'])
         return nearby_places
-    
+
     def correlate_photos_to_locations(self, data_dir: Path, output_dir: Path) -> bool:
         """Main processing function to correlate photos with regions and places"""
         try:
             # Load all required data
             regional_data, saved_data, photo_data = self.load_existing_data(data_dir)
-            
+
             if not regional_data.get('regions'):
                 logger.error("No regional centers data found")
                 return False
-            
+
             if not photo_data.get('photos'):
                 logger.error("No photo metadata found")
                 return False
-            
+
             logger.info(f"Processing {len(photo_data['photos'])} photos against {len(regional_data['regions'])} regions")
-            
+
             # Get geotagged photos only
             geotagged_photos = [p for p in photo_data['photos'] if p.get('has_geolocation')]
             places_list = saved_data.get('places', [])
-            
+
             logger.info(f"Found {len(geotagged_photos)} geotagged photos and {len(places_list)} saved/labeled places")
-            
+
             # Process photos
             region_groups = {}
             unmatched_photos = []
-            
+
             for i, photo in enumerate(geotagged_photos):
                 if i % 5 == 0 and i > 0:
                     logger.info(f"Processing photo {i+1}/{len(geotagged_photos)} ({(i+1)/len(geotagged_photos)*100:.1f}%)")
-                
+
                 coords = photo.get('coordinates', {})
                 if not coords:
                     continue
-                
+
                 photo_lat = coords.get('latitude')
                 photo_lon = coords.get('longitude')
-                
+
                 if photo_lat is None or photo_lon is None:
                     continue
-                
+
                 # Find nearest region
                 nearest_region, distance_to_region = self.find_nearest_region(
                     photo_lat, photo_lon, regional_data['regions']
                 )
-                
+
                 # Find nearby places
                 nearby_places = self.find_nearest_places(photo_lat, photo_lon, places_list)
-                
+
                 photo_location_data = {
                     'filename': photo.get('filename'),
                     'timestamp': photo.get('timestamp'),
@@ -1080,18 +1080,18 @@ class PhotoLocationCorrelator:
                     'nearby_places': nearby_places,
                     'nearest_place': nearby_places[0] if nearby_places else None
                 }
-                
+
                 if nearest_region:
                     if nearest_region not in region_groups:
                         region_groups[nearest_region] = []
                     region_groups[nearest_region].append(photo_location_data)
                 else:
                     unmatched_photos.append(photo_location_data)
-            
+
             # Sort photos within each region by timestamp
             for region_photos in region_groups.values():
                 region_photos.sort(key=lambda x: x.get('timestamp', ''))
-            
+
             # Calculate statistics per region
             region_summaries = {}
             for region_name, photos in region_groups.items():
@@ -1103,16 +1103,16 @@ class PhotoLocationCorrelator:
                         'first_photo': timestamps[0],
                         'last_photo': timestamps[-1]
                     }
-                
+
                 region_summaries[region_name] = {
                     'photo_count': len(photos),
                     'date_range': date_range,
                     'photos': photos
                 }
-            
+
             # Prepare output
             output_dir.mkdir(exist_ok=True)
-            
+
             photo_locations_output = {
                 'metadata': {
                     'processing_date': datetime.now(UTC).isoformat(),
@@ -1126,17 +1126,17 @@ class PhotoLocationCorrelator:
                 'regions': region_summaries,
                 'unmatched_photos': unmatched_photos
             }
-            
+
             with open(output_dir / 'photo_locations.json', 'w') as f:
                 json.dump(photo_locations_output, f, indent=2)
-            
+
             logger.info(f"Successfully correlated {len(geotagged_photos)} photos")
             logger.info(f"Matched {sum(len(photos) for photos in region_groups.values())} photos to {len(region_groups)} regions")
             logger.info(f"Found {len(unmatched_photos)} unmatched photos")
             logger.info(f"Output written to {output_dir / 'photo_locations.json'}")
-            
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Error correlating photos to locations: {e}")
             return False
@@ -1144,38 +1144,38 @@ class PhotoLocationCorrelator:
 
 class ReviewVisitsExtractor:
     """Extract review timestamps as visit confirmations"""
-    
+
     def __init__(self):
         self.place_matching_tolerance_miles = 0.25  # Quarter mile for fuzzy matching
         self.region_distance_threshold_miles = 10.0
-    
+
     def load_existing_data(self, data_dir: Path) -> tuple[dict, dict]:
         """Load regional centers and saved/labeled places data"""
         regional_centers = {}
         all_places = []
-        
+
         # Load regional centers
         regional_file = data_dir / 'regional_centers.json'
         if regional_file.exists():
             with open(regional_file) as f:
                 regional_centers = json.load(f)
-        
+
         # Load saved places
         saved_file = data_dir / 'saved_places.json'
         if saved_file.exists():
             with open(saved_file) as f:
                 saved_data = json.load(f)
                 all_places.extend(saved_data.get('places', []))
-        
+
         # Load labeled places
         labeled_file = data_dir / 'labeled_places.json'
         if labeled_file.exists():
             with open(labeled_file) as f:
                 labeled_data = json.load(f)
                 all_places.extend(labeled_data.get('places', []))
-        
+
         return regional_centers, all_places
-    
+
     def calculate_distance_miles(self, lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         """Calculate distance in miles between two coordinates"""
         try:
@@ -1186,59 +1186,59 @@ class ReviewVisitsExtractor:
         except Exception as e:
             logger.warning(f"Error calculating distance: {e}")
             return float('inf')
-    
+
     def fuzzy_match_place_name(self, review_name: str, place_name: str) -> float:
         """Simple fuzzy matching score for place names (0-1, higher is better)"""
         review_name_lower = review_name.lower().strip()
         place_name_lower = place_name.lower().strip()
-        
+
         # Exact match
         if review_name_lower == place_name_lower:
             return 1.0
-        
+
         # Substring match
         if review_name_lower in place_name_lower or place_name_lower in review_name_lower:
             return 0.8
-        
+
         # Word overlap - simple approach
         review_words = set(review_name_lower.split())
         place_words = set(place_name_lower.split())
-        
+
         if review_words and place_words:
             overlap = len(review_words.intersection(place_words))
             total = len(review_words.union(place_words))
             return overlap / total if total > 0 else 0.0
-        
+
         return 0.0
-    
+
     def find_matching_place(self, review_name: str, review_lat: float, review_lon: float, places: list) -> dict | None:
         """Find the best matching place for a review"""
         best_match = None
         best_score = 0.0
-        
+
         for place in places:
             place_lat = place.get('latitude')
             place_lon = place.get('longitude')
             place_name = place.get('name', '')
-            
+
             if place_lat is None or place_lon is None:
                 continue
-            
+
             # Calculate distance
             distance = self.calculate_distance_miles(review_lat, review_lon, place_lat, place_lon)
-            
+
             # Only consider places within tolerance
             if distance > self.place_matching_tolerance_miles:
                 continue
-            
+
             # Calculate name similarity
             name_score = self.fuzzy_match_place_name(review_name, place_name)
-            
+
             # Combined score: name similarity weighted more than distance
             # Closer places get bonus, perfect name match is weighted heavily
             distance_score = max(0, 1 - (distance / self.place_matching_tolerance_miles))
             combined_score = (name_score * 0.7) + (distance_score * 0.3)
-            
+
             if combined_score > best_score and combined_score > 0.3:  # Minimum threshold
                 best_score = combined_score
                 best_match = {
@@ -1247,69 +1247,69 @@ class ReviewVisitsExtractor:
                     'name_score': name_score,
                     'combined_score': combined_score
                 }
-        
+
         return best_match
-    
+
     def find_nearest_region(self, review_lat: float, review_lon: float, regions: dict) -> tuple[str | None, float]:
         """Find the nearest region for a review location"""
         nearest_region = None
         min_distance = float('inf')
-        
+
         for region_name, region_data in regions.items():
             center = region_data.get('center', {})
             if not center:
                 continue
-                
+
             region_lat = center.get('latitude')
             region_lon = center.get('longitude')
-            
+
             if region_lat is None or region_lon is None:
                 continue
-            
+
             distance = self.calculate_distance_miles(review_lat, review_lon, region_lat, region_lon)
-            
+
             if distance < min_distance and distance <= self.region_distance_threshold_miles:
                 min_distance = distance
                 nearest_region = region_name
-        
+
         return nearest_region, min_distance if nearest_region else float('inf')
-    
+
     def extract_review_visits(self, reviews_file: Path, data_dir: Path, output_dir: Path) -> bool:
         """Main processing function for review visits"""
         try:
             # Load review data
             with open(reviews_file) as f:
                 review_data = json.load(f)
-            
+
             reviews = review_data.get('features', [])
             logger.info(f"Loaded {len(reviews)} reviews")
-            
+
             if not reviews:
                 logger.warning("No reviews found")
                 return False
-            
+
             # Load existing data
             regional_data, all_places = self.load_existing_data(data_dir)
-            
+
             logger.info(f"Loaded {len(regional_data.get('regions', {}))} regions and {len(all_places)} places")
-            
+
             # Process reviews
             processed_reviews = []
             matched_to_places = 0
             matched_to_regions = 0
-            
+
             for i, review_feature in enumerate(reviews):
                 try:
                     coords = review_feature.get('geometry', {}).get('coordinates', [])
                     props = review_feature.get('properties', {})
                     location = props.get('location', {})
-                    
+
                     if len(coords) < 2:
                         logger.warning(f"Review {i+1} missing coordinates")
                         continue
-                    
+
                     review_lon, review_lat = coords[0], coords[1]
-                    
+
                     review_record = {
                         'id': f"review_{i+1:03d}",
                         'place_name': location.get('name', 'Unknown Place'),
@@ -1328,15 +1328,15 @@ class ReviewVisitsExtractor:
                         'distance_to_region': None,
                         'visit_type': 'confirmed'
                     }
-                    
+
                     # Try to match to existing places
                     place_match = self.find_matching_place(
-                        review_record['place_name'], 
-                        review_lat, 
-                        review_lon, 
+                        review_record['place_name'],
+                        review_lat,
+                        review_lon,
                         all_places
                     )
-                    
+
                     if place_match:
                         matched_to_places += 1
                         review_record['matched_place'] = place_match['place'].get('id')
@@ -1346,26 +1346,26 @@ class ReviewVisitsExtractor:
                             'combined_score': place_match['combined_score'],
                             'matched_name': place_match['place'].get('name')
                         }
-                    
+
                     # Find nearest region
                     nearest_region, distance_to_region = self.find_nearest_region(
                         review_lat, review_lon, regional_data.get('regions', {})
                     )
-                    
+
                     if nearest_region:
                         matched_to_regions += 1
                         review_record['region'] = nearest_region
                         review_record['distance_to_region'] = distance_to_region
-                    
+
                     processed_reviews.append(review_record)
-                    
+
                 except Exception as e:
                     logger.error(f"Error processing review {i+1}: {e}")
                     continue
-            
+
             # Prepare output
             output_dir.mkdir(exist_ok=True)
-            
+
             review_visits_output = {
                 'metadata': {
                     'extraction_date': datetime.now(UTC).isoformat(),
@@ -1378,17 +1378,17 @@ class ReviewVisitsExtractor:
                 },
                 'reviews': processed_reviews
             }
-            
+
             with open(output_dir / 'review_visits.json', 'w') as f:
                 json.dump(review_visits_output, f, indent=2)
-            
+
             logger.info(f"Successfully processed {len(processed_reviews)} reviews")
             logger.info(f"Matched {matched_to_places} reviews to existing places ({(matched_to_places/len(processed_reviews)*100):.1f}%)")
             logger.info(f"Matched {matched_to_regions} reviews to regions ({(matched_to_regions/len(processed_reviews)*100):.1f}%)")
             logger.info(f"Output written to {output_dir / 'review_visits.json'}")
-            
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Error extracting review visits: {e}")
             return False
@@ -1396,43 +1396,43 @@ class ReviewVisitsExtractor:
 
 class VisitTimelineGenerator:
     """Generate comprehensive visit timeline from all data sources"""
-    
+
     def __init__(self):
         self.deduplication_window_hours = 24  # Consider visits within 24 hours as same visit
-    
+
     def load_all_data(self, data_dir: Path) -> tuple[dict, dict, dict, dict]:
         """Load all required data sources"""
         photo_locations = {}
         review_visits = {}
         saved_places = {}
         regional_centers = {}
-        
+
         # Load photo locations
         photo_file = data_dir / 'photo_locations.json'
         if photo_file.exists():
             with open(photo_file) as f:
                 photo_locations = json.load(f)
-        
+
         # Load review visits
         review_file = data_dir / 'review_visits.json'
         if review_file.exists():
             with open(review_file) as f:
                 review_visits = json.load(f)
-        
+
         # Load saved places
         saved_file = data_dir / 'saved_places.json'
         if saved_file.exists():
             with open(saved_file) as f:
                 saved_places = json.load(f)
-        
+
         # Load regional centers
         regional_file = data_dir / 'regional_centers.json'
         if regional_file.exists():
             with open(regional_file) as f:
                 regional_centers = json.load(f)
-        
+
         return photo_locations, review_visits, saved_places, regional_centers
-    
+
     def parse_timestamp(self, timestamp_str: str) -> datetime | None:
         """Parse timestamp string to datetime object, filtering out epoch time"""
         if not timestamp_str:
@@ -1446,26 +1446,26 @@ class VisitTimelineGenerator:
         except Exception as e:
             logger.warning(f"Failed to parse timestamp '{timestamp_str}': {e}")
             return None
-    
+
     def extract_visits_from_photos(self, photo_data: dict) -> list:
         """Extract visit data from photo locations"""
         visits = []
-        
+
         for region_name, region_info in photo_data.get('regions', {}).items():
             for photo in region_info.get('photos', []):
                 timestamp = photo.get('timestamp')
                 if not timestamp:
                     continue
-                
+
                 dt = self.parse_timestamp(timestamp)
                 if not dt:
                     continue
-                
+
                 places_visited = []
                 nearest_place = photo.get('nearest_place')
                 if nearest_place:
                     places_visited.append(nearest_place.get('name', 'Unknown'))
-                
+
                 visit = {
                     'region': region_name,
                     'datetime': dt,
@@ -1477,24 +1477,24 @@ class VisitTimelineGenerator:
                     'timestamp_str': timestamp
                 }
                 visits.append(visit)
-        
+
         return visits
-    
+
     def extract_visits_from_reviews(self, review_data: dict) -> list:
         """Extract visit data from review visits"""
         visits = []
-        
+
         for review in review_data.get('reviews', []):
             timestamp = review.get('review_date')
             region = review.get('region')
-            
+
             if not timestamp or not region:
                 continue
-            
+
             dt = self.parse_timestamp(timestamp)
             if not dt:
                 continue
-            
+
             visit = {
                 'region': region,
                 'datetime': dt,
@@ -1508,24 +1508,24 @@ class VisitTimelineGenerator:
                 'review_text_preview': review.get('text_preview', '')
             }
             visits.append(visit)
-        
+
         return visits
-    
+
     def extract_visits_from_saved_places(self, saved_data: dict) -> list:
         """Extract visit data from saved places"""
         visits = []
-        
+
         for place in saved_data.get('places', []):
             timestamp = place.get('saved_date')
             region = place.get('region')
-            
+
             if not timestamp or not region:
                 continue
-            
+
             dt = self.parse_timestamp(timestamp)
             if not dt:
                 continue
-            
+
             visit = {
                 'region': region,
                 'datetime': dt,
@@ -1540,33 +1540,33 @@ class VisitTimelineGenerator:
                 'timestamp_str': timestamp
             }
             visits.append(visit)
-        
+
         return visits
-    
+
     def deduplicate_visits(self, visits: list) -> list:
         """Remove duplicate visits within the deduplication window"""
         if not visits:
             return []
-        
+
         # Sort visits by datetime
         visits.sort(key=lambda v: v['datetime'])
-        
+
         deduplicated = []
-        
+
         for visit in visits:
             # Check if this visit is a duplicate of any recent visit to the same region
             is_duplicate = False
-            
+
             for existing in reversed(deduplicated):
                 if existing['region'] != visit['region']:
                     continue
-                
+
                 time_diff = abs((visit['datetime'] - existing['datetime']).total_seconds() / 3600)
                 if time_diff <= self.deduplication_window_hours:
                     # This is a duplicate - merge places_visited if different
                     new_places = set(visit['places_visited']) - set(existing['places_visited'])
                     existing['places_visited'].extend(list(new_places))
-                    
+
                     # Keep the source with most information (reviews > photos > saved places)
                     source_priority = {'review': 3, 'photo': 2, 'saved_place': 1}
                     if source_priority.get(visit['source'], 0) > source_priority.get(existing['source'], 0):
@@ -1576,43 +1576,43 @@ class VisitTimelineGenerator:
                             existing['rating'] = visit['rating']
                         if 'review_text_preview' in visit:
                             existing['review_text_preview'] = visit['review_text_preview']
-                    
+
                     is_duplicate = True
                     break
-            
+
             if not is_duplicate:
                 deduplicated.append(visit)
-        
+
         return deduplicated
-    
+
     def calculate_visit_stats(self, visits: list) -> dict:
         """Calculate visit statistics for a region"""
         if not visits:
             return {}
-        
+
         # Sort by datetime
         visits.sort(key=lambda v: v['datetime'])
-        
+
         first_visit = visits[0]['datetime']
         last_visit = visits[-1]['datetime']
-        
+
         # Calculate average days between visits
         avg_days_between = 0
         if len(visits) > 1:
             total_days = (last_visit - first_visit).days
             avg_days_between = round(total_days / (len(visits) - 1), 1)
-        
+
         # Group by year
         visits_by_year = {}
         visits_by_month = {}
-        
+
         for visit in visits:
             year = str(visit['datetime'].year)
             month = visit['datetime'].strftime('%Y-%m')
-            
+
             visits_by_year[year] = visits_by_year.get(year, 0) + 1
             visits_by_month[month] = visits_by_month.get(month, 0) + 1
-        
+
         return {
             'visit_count': len(visits),
             'first_visit': first_visit.isoformat(),
@@ -1621,29 +1621,29 @@ class VisitTimelineGenerator:
             'visits_by_year': dict(sorted(visits_by_year.items())),
             'visits_by_month': dict(sorted(visits_by_month.items()))
         }
-    
+
     def generate_timeline(self, data_dir: Path, output_dir: Path) -> bool:
         """Main processing function to generate visit timeline"""
         try:
             # Load all data sources
             photo_data, review_data, saved_data, regional_data = self.load_all_data(data_dir)
-            
+
             logger.info("Extracting visits from all data sources...")
-            
+
             # Extract visits from each source
             photo_visits = self.extract_visits_from_photos(photo_data)
             review_visits = self.extract_visits_from_reviews(review_data)
             saved_visits = self.extract_visits_from_saved_places(saved_data)
-            
+
             logger.info(f"Extracted {len(photo_visits)} photo visits, {len(review_visits)} review visits, {len(saved_visits)} saved place visits")
-            
+
             # Combine all visits
             all_visits = photo_visits + review_visits + saved_visits
-            
+
             if not all_visits:
                 logger.warning("No visits found from any data source")
                 return False
-            
+
             # Group by region and deduplicate
             visits_by_region = {}
             for visit in all_visits:
@@ -1651,23 +1651,23 @@ class VisitTimelineGenerator:
                 if region not in visits_by_region:
                     visits_by_region[region] = []
                 visits_by_region[region].append(visit)
-            
+
             # Deduplicate within each region
             for region in visits_by_region:
                 visits_by_region[region] = self.deduplicate_visits(visits_by_region[region])
-            
+
             # Calculate statistics for each region
             region_timelines = {}
             total_visits = 0
             all_timestamps = []
-            
+
             for region, visits in visits_by_region.items():
                 if not visits:
                     continue
-                
+
                 stats = self.calculate_visit_stats(visits)
                 total_visits += len(visits)
-                
+
                 # Prepare visit records for output
                 visit_records = []
                 for visit in visits:
@@ -1677,21 +1677,21 @@ class VisitTimelineGenerator:
                         'source_id': visit['source_id'],
                         'places_visited': visit['places_visited']
                     }
-                    
+
                     # Add optional fields if present
                     if 'rating' in visit:
                         record['rating'] = visit['rating']
                     if 'review_text_preview' in visit:
                         record['review_text_preview'] = visit['review_text_preview']
-                    
+
                     visit_records.append(record)
                     all_timestamps.append(visit['datetime'])
-                
+
                 region_timelines[region] = {
                     **stats,
                     'visits': visit_records
                 }
-            
+
             # Calculate overall metadata
             all_timestamps.sort()
             date_range = {}
@@ -1700,17 +1700,17 @@ class VisitTimelineGenerator:
                     'first_visit': all_timestamps[0].isoformat(),
                     'last_visit': all_timestamps[-1].isoformat()
                 }
-            
+
             # Sort regions by visit count
             region_rankings = sorted(
                 [(region, info['visit_count']) for region, info in region_timelines.items()],
                 key=lambda x: x[1],
                 reverse=True
             )
-            
+
             # Prepare output
             output_dir.mkdir(exist_ok=True)
-            
+
             timeline_output = {
                 'metadata': {
                     'generation_date': datetime.now(UTC).isoformat(),
@@ -1720,7 +1720,7 @@ class VisitTimelineGenerator:
                     'deduplication_window_hours': self.deduplication_window_hours,
                     'data_sources': {
                         'photo_visits': len(photo_visits),
-                        'review_visits': len(review_visits), 
+                        'review_visits': len(review_visits),
                         'saved_place_visits': len(saved_visits),
                         'total_before_deduplication': len(all_visits)
                     }
@@ -1730,18 +1730,18 @@ class VisitTimelineGenerator:
                     'most_visited_regions': region_rankings[:10]
                 }
             }
-            
+
             with open(output_dir / 'visit_timeline.json', 'w') as f:
                 json.dump(timeline_output, f, indent=2)
-            
+
             logger.info(f"Successfully generated visit timeline for {len(region_timelines)} regions")
             logger.info(f"Total visits after deduplication: {total_visits}")
             logger.info(f"Date range: {date_range.get('first_visit', 'N/A')} to {date_range.get('last_visit', 'N/A')}")
             logger.info(f"Top region: {region_rankings[0][0]} ({region_rankings[0][1]} visits)" if region_rankings else "No visits found")
             logger.info(f"Output written to {output_dir / 'visit_timeline.json'}")
-            
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Error generating visit timeline: {e}")
             return False
@@ -1749,10 +1749,10 @@ class VisitTimelineGenerator:
 
 class SummaryReportGenerator:
     """Generate human-readable markdown summary report from all analyzed data"""
-    
+
     def __init__(self):
         self.report_lines = []
-    
+
     def load_all_data(self, data_dir: Path) -> tuple[dict, dict, dict, dict, dict]:
         """Load all processed data sources"""
         visit_timeline = {}
@@ -1760,52 +1760,52 @@ class SummaryReportGenerator:
         saved_places = {}
         photo_locations = {}
         review_visits = {}
-        
+
         # Load visit timeline (main source)
         timeline_file = data_dir / 'visit_timeline.json'
         if timeline_file.exists():
             with open(timeline_file) as f:
                 visit_timeline = json.load(f)
-        
+
         # Load regional centers
         regional_file = data_dir / 'regional_centers.json'
         if regional_file.exists():
             with open(regional_file) as f:
                 regional_centers = json.load(f)
-        
+
         # Load saved places
         saved_file = data_dir / 'saved_places.json'
         if saved_file.exists():
             with open(saved_file) as f:
                 saved_places = json.load(f)
-        
+
         # Load photo locations
         photo_file = data_dir / 'photo_locations.json'
         if photo_file.exists():
             with open(photo_file) as f:
                 photo_locations = json.load(f)
-        
+
         # Load review visits
         review_file = data_dir / 'review_visits.json'
         if review_file.exists():
             with open(review_file) as f:
                 review_visits = json.load(f)
-        
+
         return visit_timeline, regional_centers, saved_places, photo_locations, review_visits
-    
+
     def generate_header_section(self, timeline_data: dict) -> None:
         """Generate report header with metadata and overview"""
         metadata = timeline_data.get('metadata', {})
         date_range = metadata.get('date_range', {})
         rankings = timeline_data.get('rankings', {})
-        
+
         generation_date = datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')
-        
+
         self.report_lines.extend([
             "# Google Maps Travel Analysis Report",
             "",
             f"**Generated:** {generation_date}",
-            f"**Data Source:** Google Takeout Maps Export",
+            "**Data Source:** Google Takeout Maps Export",
             f"**Analysis Period:** {date_range.get('first_visit', 'N/A')[:10]} to {date_range.get('last_visit', 'N/A')[:10]}",
             "",
             "## Table of Contents",
@@ -1824,15 +1824,15 @@ class SummaryReportGenerator:
             f"- **Review Visits:** {metadata.get('data_sources', {}).get('review_visits', 0)}",
             f"- **Saved Place Visits:** {metadata.get('data_sources', {}).get('saved_place_visits', 0)}",
         ])
-        
+
         # Add top region if available
         top_regions = rankings.get('most_visited_regions', [])
         if top_regions:
             top_region, top_visits = top_regions[0]
             self.report_lines.append(f"- **Most Visited Region:** {top_region} ({top_visits} visits)")
-        
+
         self.report_lines.append("")
-    
+
     def calculate_days_since_last_visit(self, last_visit_str: str) -> int:
         """Calculate days since last visit"""
         try:
@@ -1841,79 +1841,79 @@ class SummaryReportGenerator:
             return (now - last_visit).days
         except Exception:
             return -1
-    
+
     def count_photos_and_places_for_region(self, region_name: str, photo_data: dict, saved_data: dict) -> tuple[int, int]:
         """Count photos and saved places for a region"""
         photo_count = 0
         place_count = 0
-        
+
         # Count photos from photo locations data
         region_photos = photo_data.get('regions', {}).get(region_name, {}).get('photos', [])
         photo_count = len(region_photos)
-        
+
         # Count saved places for this region
         saved_places = saved_data.get('places', [])
         place_count = sum(1 for place in saved_places if place.get('region') == region_name)
-        
+
         return photo_count, place_count
-    
+
     def generate_regional_summary_section(self, timeline_data: dict, photo_data: dict, saved_data: dict) -> None:
         """Generate regional visit summary table"""
         regions = timeline_data.get('regions', {})
-        
+
         self.report_lines.extend([
             "## Regional Visit Summary",
             "",
             "| Region | Visits | First Visit | Last Visit | Days Since | Photos | Places |",
             "|--------|--------|-------------|------------|------------|--------|--------|"
         ])
-        
+
         # Sort regions by visit count (descending)
         sorted_regions = sorted(
             regions.items(),
             key=lambda x: x[1].get('visit_count', 0),
             reverse=True
         )
-        
+
         for region_name, region_info in sorted_regions[:25]:  # Top 25 regions
             visits = region_info.get('visit_count', 0)
             first_visit = region_info.get('first_visit', 'N/A')[:10] if region_info.get('first_visit') else 'N/A'
             last_visit = region_info.get('last_visit', 'N/A')[:10] if region_info.get('last_visit') else 'N/A'
-            
+
             days_since = self.calculate_days_since_last_visit(region_info.get('last_visit', ''))
             days_since_str = str(days_since) if days_since >= 0 else 'N/A'
-            
+
             photo_count, place_count = self.count_photos_and_places_for_region(region_name, photo_data, saved_data)
-            
+
             self.report_lines.append(
                 f"| {region_name} | {visits} | {first_visit} | {last_visit} | {days_since_str} | {photo_count} | {place_count} |"
             )
-        
+
         self.report_lines.append("")
-    
+
     def generate_timeline_section(self, timeline_data: dict) -> None:
         """Generate visual timeline representations"""
         regions = timeline_data.get('regions', {})
-        
+
         self.report_lines.extend([
             "## Travel Timeline",
             "",
             "### Visit Activity by Year",
             ""
         ])
-        
+
         # Aggregate visits by year across all regions
         year_totals = {}
         for region_info in regions.values():
             visits_by_year = region_info.get('visits_by_year', {})
             for year, count in visits_by_year.items():
                 year_totals[year] = year_totals.get(year, 0) + count
-        
+
         # Create ASCII chart for yearly visits
         if year_totals:
             max_visits = max(year_totals.values())
             scale_factor = 50 / max_visits if max_visits > 0 else 1
-            
+
             self.report_lines.append("```")
             for year in sorted(year_totals.keys()):
                 visits = year_totals[year]
@@ -1921,49 +1921,49 @@ class SummaryReportGenerator:
                 bar = "█" * bar_length
                 self.report_lines.append(f"{year}: {bar} ({visits} visits)")
             self.report_lines.extend(["```", ""])
-        
+
         # Top 10 most visited regions timeline
         sorted_regions = sorted(
             regions.items(),
             key=lambda x: x[1].get('visit_count', 0),
             reverse=True
         )
-        
+
         self.report_lines.extend([
             "### Top 10 Most Visited Regions",
             ""
         ])
-        
+
         for i, (region_name, region_info) in enumerate(sorted_regions[:10]):
             visits = region_info.get('visit_count', 0)
             first_visit = region_info.get('first_visit', 'N/A')[:10] if region_info.get('first_visit') else 'N/A'
             last_visit = region_info.get('last_visit', 'N/A')[:10] if region_info.get('last_visit') else 'N/A'
             avg_days = region_info.get('avg_days_between_visits', 0)
-            
+
             intensity_emoji = "🔥" if visits > 50 else "⭐" if visits > 20 else "📍"
-            
+
             self.report_lines.extend([
                 f"**{i+1}. {region_name}** {intensity_emoji}",
                 f"- **{visits} visits** | First: {first_visit} | Last: {last_visit}",
                 f"- Average {avg_days} days between visits",
                 ""
             ])
-    
+
     def generate_insights_section(self, timeline_data: dict) -> None:
         """Generate travel insights and patterns"""
         regions = timeline_data.get('regions', {})
         metadata = timeline_data.get('metadata', {})
-        
+
         self.report_lines.extend([
             "## Travel Insights",
             ""
         ])
-        
+
         # Recent vs old regions
         recent_regions = []
         old_regions = []
         now = datetime.now(UTC)
-        
+
         for region_name, region_info in regions.items():
             last_visit_str = region_info.get('last_visit')
             if last_visit_str:
@@ -1976,42 +1976,42 @@ class SummaryReportGenerator:
                         recent_regions.append((region_name, days_since))
                 except Exception:
                     continue
-        
+
         # Sort by recency
         recent_regions.sort(key=lambda x: x[1])
         old_regions.sort(key=lambda x: x[1], reverse=True)
-        
+
         self.report_lines.extend([
             "### Recent Travel Activity (Last 90 Days)",
             ""
         ])
-        
+
         if recent_regions:
             for region, days_ago in recent_regions[:10]:
                 self.report_lines.append(f"- **{region}** - {days_ago} days ago")
         else:
             self.report_lines.append("- No recent travel activity recorded")
-        
+
         self.report_lines.extend([
             "",
             "### Regions Not Visited in Over 1 Year",
             ""
         ])
-        
+
         if old_regions:
             for region, days_ago in old_regions[:15]:
                 years_ago = round(days_ago / 365.25, 1)
                 self.report_lines.append(f"- **{region}** - {years_ago} years ago")
         else:
             self.report_lines.append("- All regions visited within the last year")
-        
+
         # Travel frequency patterns
         total_visits = metadata.get('total_visits', 0)
         total_regions = metadata.get('total_regions', 0)
-        
+
         if total_regions > 0:
             avg_visits_per_region = round(total_visits / total_regions, 1)
-            
+
             self.report_lines.extend([
                 "",
                 "### Travel Patterns",
@@ -2020,11 +2020,11 @@ class SummaryReportGenerator:
                 f"- **Total unique destinations:** {total_regions}",
                 f"- **Total recorded visits:** {total_visits}"
             ])
-    
+
     def generate_data_sources_section(self, metadata: dict) -> None:
         """Generate data sources and methodology section"""
         data_sources = metadata.get('data_sources', {})
-        
+
         self.report_lines.extend([
             "",
             "## Data Sources",
@@ -2053,38 +2053,38 @@ class SummaryReportGenerator:
             f"**Report Generated:** {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}",
             ""
         ])
-    
+
     def generate_report(self, data_dir: Path, output_dir: Path) -> bool:
         """Main processing function to generate summary report"""
         try:
             # Load all data
             timeline_data, regional_data, saved_data, photo_data, review_data = self.load_all_data(data_dir)
-            
+
             if not timeline_data.get('regions'):
                 logger.error("No timeline data found")
                 return False
-            
+
             logger.info("Generating summary report sections...")
-            
+
             # Generate each section
             self.generate_header_section(timeline_data)
             self.generate_regional_summary_section(timeline_data, photo_data, saved_data)
             self.generate_timeline_section(timeline_data)
             self.generate_insights_section(timeline_data)
             self.generate_data_sources_section(timeline_data.get('metadata', {}))
-            
+
             # Write output
             output_dir.mkdir(exist_ok=True)
-            
+
             with open(output_dir / 'summary_report.md', 'w') as f:
                 f.write('\n'.join(self.report_lines))
-            
+
             logger.info(f"Successfully generated summary report with {len(self.report_lines)} lines")
             logger.info(f"Report covers {len(timeline_data.get('regions', {}))} regions")
             logger.info(f"Output written to {output_dir / 'summary_report.md'}")
-            
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Error generating summary report: {e}")
             return False
@@ -2092,7 +2092,7 @@ class SummaryReportGenerator:
 
 class DataAnalysisPipeline:
     """Orchestrates the complete data analysis pipeline"""
-    
+
     def __init__(self, input_dir: Path = Path("takeout/maps"), output_dir: Path = Path("data"), dry_run: bool = False):
         self.input_dir = input_dir
         self.output_dir = output_dir
@@ -2153,59 +2153,59 @@ class DataAnalysisPipeline:
                 'function': self._run_summary_report
             }
         ]
-    
+
     def check_prerequisites(self) -> tuple[bool, list[str]]:
         """Check if all required input files exist"""
         missing_files = []
-        
+
         for step in self.pipeline_steps:
             for required_file in step['required_files']:
                 file_path = self.input_dir / required_file
                 if not file_path.exists():
                     missing_files.append(str(file_path))
-        
+
         return len(missing_files) == 0, missing_files
-    
+
     def check_step_dependencies(self, step_name: str) -> bool:
         """Check if a step's dependencies are satisfied"""
         step = next((s for s in self.pipeline_steps if s['name'] == step_name), None)
         if not step:
             return False
-        
+
         dependencies = step.get('dependencies', [])
         for dep in dependencies:
             dep_step = next((s for s in self.pipeline_steps if s['name'] == dep), None)
             if not dep_step:
                 continue
-            
+
             # Check if dependency outputs exist
             for output_file in dep_step['output_files']:
                 if not (self.output_dir / output_file).exists():
                     return False
-        
+
         return True
-    
+
     def get_next_runnable_steps(self, completed_steps: set[str]) -> list[dict]:
         """Get list of steps that can be run next"""
         runnable = []
-        
+
         for step in self.pipeline_steps:
             if step['name'] in completed_steps:
                 continue
-            
+
             dependencies = step.get('dependencies', [])
             if all(dep in completed_steps for dep in dependencies):
                 runnable.append(step)
-        
+
         return runnable
-    
+
     def run_pipeline(self, resume: bool = False) -> bool:
         """Execute the complete data analysis pipeline"""
         logger.info("Starting Oh My Stars data analysis pipeline")
-        
+
         if self.dry_run:
             logger.info("DRY RUN MODE - No files will be modified")
-        
+
         # Check prerequisites
         prerequisites_ok, missing_files = self.check_prerequisites()
         if not prerequisites_ok:
@@ -2213,40 +2213,40 @@ class DataAnalysisPipeline:
             for file_path in missing_files:
                 logger.error(f"  - {file_path}")
             return False
-        
+
         # Determine completed steps if resuming
         completed_steps = set()
         if resume:
             for step in self.pipeline_steps:
                 output_exists = all(
-                    (self.output_dir / output_file).exists() 
+                    (self.output_dir / output_file).exists()
                     for output_file in step['output_files']
                 )
                 if output_exists:
                     completed_steps.add(step['name'])
                     logger.info(f"Step '{step['name']}' already completed - skipping")
-        
+
         # Execute pipeline steps
         total_steps = len(self.pipeline_steps)
-        
+
         while len(completed_steps) < total_steps:
             runnable_steps = self.get_next_runnable_steps(completed_steps)
-            
+
             if not runnable_steps:
                 logger.error("No runnable steps found - pipeline may have circular dependencies")
                 return False
-            
+
             # Execute next step
             step = runnable_steps[0]  # Execute steps one at a time for now
             step_num = len(completed_steps) + 1
-            
+
             logger.info(f"[{step_num}/{total_steps}] Executing: {step['description']}")
-            
+
             if self.dry_run:
                 logger.info(f"DRY RUN: Would execute {step['name']}")
                 completed_steps.add(step['name'])
                 continue
-            
+
             try:
                 success = step['function']()
                 if success:
@@ -2258,46 +2258,46 @@ class DataAnalysisPipeline:
             except Exception as e:
                 logger.error(f"✗ Error in {step['name']}: {e}")
                 return False
-        
+
         logger.info("🎉 Pipeline completed successfully!")
         logger.info(f"📊 Generated analysis report: {self.output_dir / 'summary_report.md'}")
-        
+
         return True
-    
+
     def _run_labeled_places(self) -> bool:
         """Execute labeled places extraction"""
         input_file = self.input_dir / "saved/My labeled places/Labeled places.json"
         extractor = LabeledPlacesExtractor()
         return extractor.process_labeled_places(input_file, self.output_dir)
-    
+
     def _run_saved_places(self) -> bool:
         """Execute saved places extraction"""
         input_file = self.input_dir / "your_places/Saved Places.json"
         extractor = SavedPlacesExtractor()
         return extractor.process_saved_places(input_file, self.output_dir)
-    
+
     def _run_photo_metadata(self) -> bool:
         """Execute photo metadata extraction"""
         photos_dir = self.input_dir / "saved/Photos and videos"
         extractor = PhotoMetadataExtractor()
         return extractor.process_photo_metadata(photos_dir, self.output_dir)
-    
+
     def _run_photo_correlation(self) -> bool:
         """Execute photo to region correlation"""
         correlator = PhotoLocationCorrelator()
         return correlator.correlate_photos_to_locations(self.output_dir, self.output_dir)
-    
+
     def _run_review_visits(self) -> bool:
         """Execute review visits extraction"""
         reviews_file = self.input_dir / "your_places/Reviews.json"
         extractor = ReviewVisitsExtractor()
         return extractor.extract_review_visits(reviews_file, self.output_dir, self.output_dir)
-    
+
     def _run_visit_timeline(self) -> bool:
         """Execute visit timeline generation"""
         generator = VisitTimelineGenerator()
         return generator.generate_timeline(self.output_dir, self.output_dir)
-    
+
     def _run_summary_report(self) -> bool:
         """Execute summary report generation"""
         generator = SummaryReportGenerator()
@@ -2306,7 +2306,7 @@ class DataAnalysisPipeline:
 
 class DataValidator:
     """Comprehensive data validation and testing utilities"""
-    
+
     def __init__(self, input_dir: Path = Path("takeout/maps"), output_dir: Path = Path("data")):
         self.input_dir = input_dir
         self.output_dir = output_dir
@@ -2318,11 +2318,11 @@ class DataValidator:
             'warnings': [],
             'summary': {}
         }
-    
+
     def is_valid_coordinate(self, lat: float, lon: float) -> bool:
         """Validate coordinate ranges"""
         return -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0
-    
+
     def is_valid_timestamp(self, timestamp_str: str) -> bool:
         """Validate timestamp format and range"""
         try:
@@ -2331,7 +2331,7 @@ class DataValidator:
             return 1990 <= dt.year <= 2030
         except Exception:
             return False
-    
+
     def validate_json_structure(self, file_path: Path, required_keys: list[str]) -> dict:
         """Validate JSON file structure"""
         result = {
@@ -2344,26 +2344,26 @@ class DataValidator:
             'file_size': 0,
             'record_count': 0
         }
-        
+
         if not result['exists']:
             result['valid'] = False
             return result
-        
+
         try:
             result['file_size'] = file_path.stat().st_size
-            
+
             with open(file_path) as f:
                 data = json.load(f)
-            
+
             result['readable'] = True
             result['valid_json'] = True
-            
+
             # Check required keys
             if isinstance(data, dict):
                 missing_keys = [key for key in required_keys if key not in data]
                 result['missing_keys'] = missing_keys
                 result['has_required_keys'] = len(missing_keys) == 0
-                
+
                 # Count records
                 if 'features' in data:
                     result['record_count'] = len(data['features'])
@@ -2373,9 +2373,9 @@ class DataValidator:
                     result['record_count'] = len(data['regions'])
                 else:
                     result['record_count'] = len(data) if isinstance(data, list) else 1
-            
+
             result['valid'] = result['has_required_keys']
-            
+
         except json.JSONDecodeError:
             result['valid'] = False
             result['readable'] = True
@@ -2383,13 +2383,13 @@ class DataValidator:
         except Exception:
             result['valid'] = False
             result['readable'] = False
-        
+
         return result
-    
+
     def validate_input_files(self) -> bool:
         """Validate all input files"""
         logger.info("Validating input files...")
-        
+
         input_files = {
             'labeled_places': {
                 'path': self.input_dir / 'saved/My labeled places/Labeled places.json',
@@ -2404,20 +2404,20 @@ class DataValidator:
                 'required_keys': ['features']
             }
         }
-        
+
         all_valid = True
-        
+
         for file_type, config in input_files.items():
             result = self.validate_json_structure(config['path'], config['required_keys'])
             self.validation_results['input_validation'][file_type] = result
-            
+
             if not result['valid']:
                 all_valid = False
                 if not result['exists']:
                     self.validation_results['warnings'].append(f"Optional file missing: {config['path']}")
                 else:
                     self.validation_results['errors'].append(f"Invalid {file_type}: {result['missing_keys']}")
-        
+
         # Validate photo directory
         photos_dir = self.input_dir / 'saved/Photos and videos'
         photos_result = {
@@ -2426,129 +2426,129 @@ class DataValidator:
             'file_count': 0,
             'json_files': 0
         }
-        
+
         if photos_result['exists'] and photos_result['is_directory']:
             json_files = list(photos_dir.glob('*.json'))
             photos_result['file_count'] = len(list(photos_dir.iterdir()))
             photos_result['json_files'] = len(json_files)
-        
+
         self.validation_results['input_validation']['photos_directory'] = photos_result
-        
+
         return all_valid
-    
+
     def validate_coordinates_in_data(self) -> bool:
         """Validate coordinates in all data sources"""
         logger.info("Validating coordinates...")
-        
+
         coordinate_errors = []
         total_coordinates = 0
         invalid_coordinates = 0
-        
+
         # Check saved places
         saved_places_file = self.output_dir / 'saved_places.json'
         if saved_places_file.exists():
             with open(saved_places_file) as f:
                 data = json.load(f)
-                
+
             for place in data.get('places', []):
                 lat = place.get('latitude')
                 lon = place.get('longitude')
-                
+
                 if lat is not None and lon is not None:
                     total_coordinates += 1
                     if not self.is_valid_coordinate(lat, lon):
                         invalid_coordinates += 1
                         coordinate_errors.append(f"Invalid coordinates in saved place {place.get('id', 'unknown')}: ({lat}, {lon})")
-        
+
         # Check photo metadata
         photo_file = self.output_dir / 'photo_metadata.json'
         if photo_file.exists():
             with open(photo_file) as f:
                 data = json.load(f)
-                
+
             for photo in data.get('photos', []):
                 coords = photo.get('coordinates') or {}
                 lat = coords.get('latitude')
                 lon = coords.get('longitude')
-                
+
                 if lat is not None and lon is not None:
                     total_coordinates += 1
                     if not self.is_valid_coordinate(lat, lon):
                         invalid_coordinates += 1
                         coordinate_errors.append(f"Invalid coordinates in photo {photo.get('filename', 'unknown')}: ({lat}, {lon})")
-        
+
         self.validation_results['processing_validation']['coordinates'] = {
             'total_coordinates': total_coordinates,
             'invalid_coordinates': invalid_coordinates,
             'error_rate': (invalid_coordinates / total_coordinates * 100) if total_coordinates > 0 else 0,
             'errors': coordinate_errors[:10]  # Limit to first 10 errors
         }
-        
+
         self.validation_results['errors'].extend(coordinate_errors)
-        
+
         return invalid_coordinates == 0
-    
+
     def validate_regional_assignments(self) -> bool:
         """Validate regional assignments and distance calculations"""
         logger.info("Validating regional assignments...")
-        
+
         regional_file = self.output_dir / 'regional_centers.json'
         photo_locations_file = self.output_dir / 'photo_locations.json'
-        
+
         if not regional_file.exists() or not photo_locations_file.exists():
             self.validation_results['warnings'].append("Regional assignment files not found for validation")
             return True
-        
+
         with open(regional_file) as f:
             regional_data = json.load(f)
-        
+
         with open(photo_locations_file) as f:
             photo_data = json.load(f)
-        
+
         assignment_errors = []
         total_assignments = 0
         invalid_assignments = 0
-        
+
         for region_name, region_info in photo_data.get('regions', {}).items():
             region_center = regional_data.get('regions', {}).get(region_name, {}).get('center', {})
-            
+
             if not region_center:
                 continue
-            
+
             center_lat = region_center.get('latitude')
             center_lon = region_center.get('longitude')
-            
+
             for photo in region_info.get('photos', []):
                 photo_coords = photo.get('coordinates', {})
                 photo_lat = photo_coords.get('latitude')
                 photo_lon = photo_coords.get('longitude')
-                
+
                 if all(coord is not None for coord in [center_lat, center_lon, photo_lat, photo_lon]):
                     total_assignments += 1
-                    
+
                     # Calculate distance
                     distance = geodesic((photo_lat, photo_lon), (center_lat, center_lon)).miles
-                    
+
                     # Check if assignment is reasonable (within 50 miles as a liberal threshold)
                     if distance > 50:
                         invalid_assignments += 1
                         assignment_errors.append(f"Photo {photo.get('filename', 'unknown')} assigned to distant region {region_name}: {distance:.1f} miles")
-        
+
         self.validation_results['processing_validation']['regional_assignments'] = {
             'total_assignments': total_assignments,
             'invalid_assignments': invalid_assignments,
             'error_rate': (invalid_assignments / total_assignments * 100) if total_assignments > 0 else 0,
             'errors': assignment_errors[:10]
         }
-        
+
         self.validation_results['errors'].extend(assignment_errors)
-        
+
         return invalid_assignments == 0
-    
+
     def validate_output_files(self) -> bool:
         """Validate all output files"""
         logger.info("Validating output files...")
-        
+
         output_files = {
             'labeled_places': {
                 'path': self.output_dir / 'labeled_places.json',
@@ -2579,20 +2579,20 @@ class DataValidator:
                 'required_keys': ['metadata', 'regions']
             }
         }
-        
+
         all_valid = True
-        
+
         for file_type, config in output_files.items():
             result = self.validate_json_structure(config['path'], config['required_keys'])
             self.validation_results['output_validation'][file_type] = result
-            
+
             if not result['valid']:
                 all_valid = False
                 if not result['exists']:
                     self.validation_results['errors'].append(f"Missing output file: {config['path']}")
                 else:
                     self.validation_results['errors'].append(f"Invalid output {file_type}: {result['missing_keys']}")
-        
+
         # Validate summary report
         summary_report = self.output_dir / 'summary_report.md'
         report_result = {
@@ -2600,7 +2600,7 @@ class DataValidator:
             'size': summary_report.stat().st_size if summary_report.exists() else 0,
             'valid': False
         }
-        
+
         if report_result['exists'] and report_result['size'] > 0:
             # Basic markdown validation
             try:
@@ -2609,59 +2609,59 @@ class DataValidator:
                     report_result['valid'] = '# Google Maps Travel Analysis Report' in content
             except Exception:
                 report_result['valid'] = False
-        
+
         self.validation_results['output_validation']['summary_report'] = report_result
-        
+
         return all_valid
-    
+
     def validate_cache_integrity(self) -> bool:
         """Validate geocoding cache integrity"""
         logger.info("Validating cache integrity...")
-        
+
         cache_file = self.output_dir / 'geocoding_cache.json'
-        
+
         if not cache_file.exists():
             self.validation_results['warnings'].append("Geocoding cache not found")
             return True
-        
+
         cache_result = self.validate_json_structure(cache_file, ['metadata', 'entries'])
         self.validation_results['processing_validation']['cache'] = cache_result
-        
+
         if not cache_result['valid']:
             self.validation_results['errors'].append("Invalid geocoding cache structure")
             return False
-        
+
         # Validate cache entries
         try:
             with open(cache_file) as f:
                 cache_data = json.load(f)
-            
+
             invalid_entries = 0
             total_entries = len(cache_data.get('entries', {}))
-            
+
             for entry in cache_data.get('entries', {}).values():
                 if not isinstance(entry, dict) or 'timestamp' not in entry or not self.is_valid_timestamp(entry['timestamp']):
                     invalid_entries += 1
-            
+
             cache_result['invalid_entries'] = invalid_entries
             cache_result['valid_entries'] = total_entries - invalid_entries
-            
+
             if invalid_entries > 0:
                 self.validation_results['warnings'].append(f"Found {invalid_entries} invalid cache entries")
-        
+
         except Exception as e:
             self.validation_results['errors'].append(f"Error validating cache entries: {e}")
             return False
-        
+
         return True
-    
+
     def generate_test_data(self) -> bool:
         """Generate minimal test dataset for validation"""
         logger.info("Generating test data...")
-        
+
         test_dir = Path("test_data")
         test_dir.mkdir(exist_ok=True)
-        
+
         # Generate test labeled places
         test_labeled_places = {
             "type": "FeatureCollection",
@@ -2694,7 +2694,7 @@ class DataValidator:
                 }
             ]
         }
-        
+
         # Generate test saved places
         test_saved_places = {
             "type": "FeatureCollection",
@@ -2713,7 +2713,7 @@ class DataValidator:
                 }
             ]
         }
-        
+
         # Generate test reviews
         test_reviews = {
             "type": "FeatureCollection",
@@ -2736,36 +2736,36 @@ class DataValidator:
                 }
             ]
         }
-        
+
         # Write test files
         try:
             with open(test_dir / 'labeled_places.json', 'w') as f:
                 json.dump(test_labeled_places, f, indent=2)
-            
+
             with open(test_dir / 'saved_places.json', 'w') as f:
                 json.dump(test_saved_places, f, indent=2)
-            
+
             with open(test_dir / 'reviews.json', 'w') as f:
                 json.dump(test_reviews, f, indent=2)
-            
+
             logger.info(f"Test data generated in {test_dir}")
             return True
-            
+
         except Exception as e:
             self.validation_results['errors'].append(f"Error generating test data: {e}")
             return False
-    
+
     def run_full_validation(self) -> bool:
         """Run complete validation suite"""
         logger.info("Running full data validation suite...")
-        
+
         # Run all validation checks
         input_valid = self.validate_input_files()
         coord_valid = self.validate_coordinates_in_data()
         regional_valid = self.validate_regional_assignments()
         output_valid = self.validate_output_files()
         cache_valid = self.validate_cache_integrity()
-        
+
         # Generate summary
         self.validation_results['summary'] = {
             'input_validation': input_valid,
@@ -2777,9 +2777,9 @@ class DataValidator:
             'total_errors': len(self.validation_results['errors']),
             'total_warnings': len(self.validation_results['warnings'])
         }
-        
+
         return self.validation_results['summary']['overall_valid']
-    
+
     def generate_validation_report(self) -> str:
         """Generate detailed validation report"""
         lines = [
@@ -2790,17 +2790,17 @@ class DataValidator:
             "## Summary",
             ""
         ]
-        
+
         summary = self.validation_results['summary']
         status_emoji = "✅" if summary.get('overall_valid', False) else "❌"
-        
+
         lines.extend([
             f"{status_emoji} **Overall Status:** {'VALID' if summary.get('overall_valid', False) else 'INVALID'}",
             f"- **Errors:** {summary.get('total_errors', 0)}",
             f"- **Warnings:** {summary.get('total_warnings', 0)}",
             ""
         ])
-        
+
         # Validation sections
         sections = [
             ('Input Validation', 'input_validation'),
@@ -2809,7 +2809,7 @@ class DataValidator:
             ('Output Validation', 'output_validation'),
             ('Cache Validation', 'cache_validation')
         ]
-        
+
         for section_name, section_key in sections:
             status = "✅ PASS" if summary.get(section_key, False) else "❌ FAIL"
             lines.extend([
@@ -2817,7 +2817,7 @@ class DataValidator:
                 f"**Status:** {status}",
                 ""
             ])
-        
+
         # Error details
         if self.validation_results['errors']:
             lines.extend([
@@ -2827,7 +2827,7 @@ class DataValidator:
             for error in self.validation_results['errors'][:20]:  # Limit to first 20
                 lines.append(f"- {error}")
             lines.append("")
-        
+
         # Warning details
         if self.validation_results['warnings']:
             lines.extend([
@@ -2837,7 +2837,7 @@ class DataValidator:
             for warning in self.validation_results['warnings'][:20]:  # Limit to first 20
                 lines.append(f"- {warning}")
             lines.append("")
-        
+
         return '\n'.join(lines)
 
 
@@ -2848,14 +2848,14 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
-    
+
     parser.add_argument('command', help='Command to execute')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be done without making changes')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging output')
     parser.add_argument('--input-dir', type=Path, default=Path('takeout/maps'), help='Path to Google Takeout data directory')
     parser.add_argument('--output-dir', type=Path, default=Path('data'), help='Path to output directory')
     parser.add_argument('--resume', action='store_true', help='Resume pipeline from last completed step')
-    
+
     return parser.parse_args()
 
 
@@ -2871,12 +2871,12 @@ def setup_logging(verbose: bool = False):
 
 def main():
     args = parse_arguments()
-    
+
     # Setup logging
     setup_logging(args.verbose)
-    
+
     command = args.command
-    
+
     # Handle pipeline command
     if command == "run-pipeline":
         pipeline = DataAnalysisPipeline(
@@ -2893,17 +2893,17 @@ def main():
             input_dir=args.input_dir,
             output_dir=args.output_dir
         )
-        
+
         if args.dry_run:
             logger.info("DRY RUN: Would run full data validation suite")
             sys.exit(0)
-        
+
         success = validator.run_full_validation()
-        
+
         # Generate and save validation report
         report = validator.generate_validation_report()
         report_file = args.output_dir / 'validation_report.md'
-        
+
         try:
             args.output_dir.mkdir(exist_ok=True)
             with open(report_file, 'w') as f:
@@ -2911,31 +2911,31 @@ def main():
             logger.info(f"Validation report written to {report_file}")
         except Exception as e:
             logger.error(f"Failed to write validation report: {e}")
-        
+
         # Print summary
         summary = validator.validation_results['summary']
         status = "✅ VALID" if success else "❌ INVALID"
-        print(f"\n=== Data Validation Results ===")
+        print("\n=== Data Validation Results ===")
         print(f"Overall Status: {status}")
         print(f"Errors: {summary.get('total_errors', 0)}")
         print(f"Warnings: {summary.get('total_warnings', 0)}")
         print(f"Report: {report_file}")
-        
+
         sys.exit(0 if success else 1)
 
     elif command == "generate-test-data":
         validator = DataValidator()
-        
+
         if args.dry_run:
             logger.info("DRY RUN: Would generate test data")
             sys.exit(0)
-        
+
         success = validator.generate_test_data()
         if success:
             logger.info("✅ Test data generated successfully in test_data/ directory")
         else:
             logger.error("❌ Failed to generate test data")
-        
+
         sys.exit(0 if success else 1)
 
     # Legacy command handling for backwards compatibility
@@ -3032,7 +3032,7 @@ def main():
     elif command == "cache-stats":
         cache = GeocodingCache()
         stats = cache.get_stats()
-        
+
         print("\n=== Geocoding Cache Statistics ===")
         print(f"Total entries: {stats['total_entries']}")
         print(f"Cache hits: {stats['cache_hits']}")
@@ -3043,12 +3043,12 @@ def main():
         print(f"Expiration: {stats['expiration_days']} days")
         print(f"Created: {stats['created']}")
         print(f"Last updated: {stats['last_updated']}")
-        
+
         # Clean expired entries
         expired_count = cache.clean_expired()
         if expired_count > 0:
             print(f"Cleaned {expired_count} expired entries")
-        
+
         sys.exit(0)
 
     elif command == "cache-clear":
