@@ -14,10 +14,14 @@
 """
 Oh My Stars - Google Takeout Maps Data Processor
 
+Analyzes starred locations, saved places, and photo geolocations from Google Takeout
+to generate regional visit summaries and comprehensive travel timelines.
+
 Usage:
-    main.py <command>
+    main.py <command> [options]
 
 Commands:
+    run-pipeline: Execute complete data analysis pipeline from start to finish
     extract-labeled-places: Extract and group starred/labeled places by region
     extract-saved-places: Extract saved places with timestamps and integrate with regions
     extract-photo-metadata: Extract geolocation data from photo metadata
@@ -27,8 +31,15 @@ Commands:
     generate-summary-report: Generate human-readable markdown summary report
     cache-stats: Display geocoding cache statistics and clean expired entries
     cache-clear: Clear all geocoding cache entries
+
+Options:
+    --dry-run: Show what would be done without making changes
+    --verbose: Enable verbose logging output
+    --input-dir: Path to Google Takeout data directory (default: takeout/maps)
+    --output-dir: Path to output directory (default: data)
 """
 
+import argparse
 import json
 import logging
 import ssl
@@ -2077,13 +2088,267 @@ class SummaryReportGenerator:
             return False
 
 
+class DataAnalysisPipeline:
+    """Orchestrates the complete data analysis pipeline"""
+    
+    def __init__(self, input_dir: Path = Path("takeout/maps"), output_dir: Path = Path("data"), dry_run: bool = False):
+        self.input_dir = input_dir
+        self.output_dir = output_dir
+        self.dry_run = dry_run
+        self.pipeline_steps = [
+            {
+                'name': 'extract-labeled-places',
+                'description': 'Extract and group starred/labeled places by region',
+                'required_files': ['saved/My labeled places/Labeled places.json'],
+                'output_files': ['labeled_places.json', 'regional_centers.json'],
+                'function': self._run_labeled_places
+            },
+            {
+                'name': 'extract-saved-places',
+                'description': 'Extract saved places with timestamps',
+                'required_files': ['your_places/Saved Places.json'],
+                'output_files': ['saved_places.json'],
+                'dependencies': ['extract-labeled-places'],
+                'function': self._run_saved_places
+            },
+            {
+                'name': 'extract-photo-metadata',
+                'description': 'Extract geolocation data from photo metadata',
+                'required_files': ['saved/Photos and videos/'],
+                'output_files': ['photo_metadata.json'],
+                'function': self._run_photo_metadata
+            },
+            {
+                'name': 'correlate-photos-to-regions',
+                'description': 'Match geotagged photos to regions',
+                'required_files': [],
+                'output_files': ['photo_locations.json'],
+                'dependencies': ['extract-labeled-places', 'extract-photo-metadata'],
+                'function': self._run_photo_correlation
+            },
+            {
+                'name': 'extract-review-visits',
+                'description': 'Extract review timestamps as visit confirmations',
+                'required_files': ['your_places/Reviews.json'],
+                'output_files': ['review_visits.json'],
+                'dependencies': ['extract-labeled-places'],
+                'function': self._run_review_visits
+            },
+            {
+                'name': 'generate-visit-timeline',
+                'description': 'Generate comprehensive visit timeline',
+                'required_files': [],
+                'output_files': ['visit_timeline.json'],
+                'dependencies': ['correlate-photos-to-regions', 'extract-review-visits', 'extract-saved-places'],
+                'function': self._run_visit_timeline
+            },
+            {
+                'name': 'generate-summary-report',
+                'description': 'Generate human-readable markdown summary',
+                'required_files': [],
+                'output_files': ['summary_report.md'],
+                'dependencies': ['generate-visit-timeline'],
+                'function': self._run_summary_report
+            }
+        ]
+    
+    def check_prerequisites(self) -> tuple[bool, list[str]]:
+        """Check if all required input files exist"""
+        missing_files = []
+        
+        for step in self.pipeline_steps:
+            for required_file in step['required_files']:
+                file_path = self.input_dir / required_file
+                if not file_path.exists():
+                    missing_files.append(str(file_path))
+        
+        return len(missing_files) == 0, missing_files
+    
+    def check_step_dependencies(self, step_name: str) -> bool:
+        """Check if a step's dependencies are satisfied"""
+        step = next((s for s in self.pipeline_steps if s['name'] == step_name), None)
+        if not step:
+            return False
+        
+        dependencies = step.get('dependencies', [])
+        for dep in dependencies:
+            dep_step = next((s for s in self.pipeline_steps if s['name'] == dep), None)
+            if not dep_step:
+                continue
+            
+            # Check if dependency outputs exist
+            for output_file in dep_step['output_files']:
+                if not (self.output_dir / output_file).exists():
+                    return False
+        
+        return True
+    
+    def get_next_runnable_steps(self, completed_steps: set[str]) -> list[dict]:
+        """Get list of steps that can be run next"""
+        runnable = []
+        
+        for step in self.pipeline_steps:
+            if step['name'] in completed_steps:
+                continue
+            
+            dependencies = step.get('dependencies', [])
+            if all(dep in completed_steps for dep in dependencies):
+                runnable.append(step)
+        
+        return runnable
+    
+    def run_pipeline(self, resume: bool = False) -> bool:
+        """Execute the complete data analysis pipeline"""
+        logger.info("Starting Oh My Stars data analysis pipeline")
+        
+        if self.dry_run:
+            logger.info("DRY RUN MODE - No files will be modified")
+        
+        # Check prerequisites
+        prerequisites_ok, missing_files = self.check_prerequisites()
+        if not prerequisites_ok:
+            logger.error("Missing required input files:")
+            for file_path in missing_files:
+                logger.error(f"  - {file_path}")
+            return False
+        
+        # Determine completed steps if resuming
+        completed_steps = set()
+        if resume:
+            for step in self.pipeline_steps:
+                output_exists = all(
+                    (self.output_dir / output_file).exists() 
+                    for output_file in step['output_files']
+                )
+                if output_exists:
+                    completed_steps.add(step['name'])
+                    logger.info(f"Step '{step['name']}' already completed - skipping")
+        
+        # Execute pipeline steps
+        total_steps = len(self.pipeline_steps)
+        
+        while len(completed_steps) < total_steps:
+            runnable_steps = self.get_next_runnable_steps(completed_steps)
+            
+            if not runnable_steps:
+                logger.error("No runnable steps found - pipeline may have circular dependencies")
+                return False
+            
+            # Execute next step
+            step = runnable_steps[0]  # Execute steps one at a time for now
+            step_num = len(completed_steps) + 1
+            
+            logger.info(f"[{step_num}/{total_steps}] Executing: {step['description']}")
+            
+            if self.dry_run:
+                logger.info(f"DRY RUN: Would execute {step['name']}")
+                completed_steps.add(step['name'])
+                continue
+            
+            try:
+                success = step['function']()
+                if success:
+                    completed_steps.add(step['name'])
+                    logger.info(f"✓ Completed: {step['name']}")
+                else:
+                    logger.error(f"✗ Failed: {step['name']}")
+                    return False
+            except Exception as e:
+                logger.error(f"✗ Error in {step['name']}: {e}")
+                return False
+        
+        logger.info("🎉 Pipeline completed successfully!")
+        logger.info(f"📊 Generated analysis report: {self.output_dir / 'summary_report.md'}")
+        
+        return True
+    
+    def _run_labeled_places(self) -> bool:
+        """Execute labeled places extraction"""
+        input_file = self.input_dir / "saved/My labeled places/Labeled places.json"
+        extractor = LabeledPlacesExtractor()
+        return extractor.process_labeled_places(input_file, self.output_dir)
+    
+    def _run_saved_places(self) -> bool:
+        """Execute saved places extraction"""
+        input_file = self.input_dir / "your_places/Saved Places.json"
+        extractor = SavedPlacesExtractor()
+        return extractor.process_saved_places(input_file, self.output_dir)
+    
+    def _run_photo_metadata(self) -> bool:
+        """Execute photo metadata extraction"""
+        photos_dir = self.input_dir / "saved/Photos and videos"
+        extractor = PhotoMetadataExtractor()
+        return extractor.process_photo_metadata(photos_dir, self.output_dir)
+    
+    def _run_photo_correlation(self) -> bool:
+        """Execute photo to region correlation"""
+        correlator = PhotoLocationCorrelator()
+        return correlator.correlate_photos_to_locations(self.output_dir, self.output_dir)
+    
+    def _run_review_visits(self) -> bool:
+        """Execute review visits extraction"""
+        reviews_file = self.input_dir / "your_places/Reviews.json"
+        extractor = ReviewVisitsExtractor()
+        return extractor.extract_review_visits(reviews_file, self.output_dir, self.output_dir)
+    
+    def _run_visit_timeline(self) -> bool:
+        """Execute visit timeline generation"""
+        generator = VisitTimelineGenerator()
+        return generator.generate_timeline(self.output_dir, self.output_dir)
+    
+    def _run_summary_report(self) -> bool:
+        """Execute summary report generation"""
+        generator = SummaryReportGenerator()
+        return generator.generate_report(self.output_dir, self.output_dir)
+
+
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description="Oh My Stars - Google Takeout Maps Data Processor",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__
+    )
+    
+    parser.add_argument('command', help='Command to execute')
+    parser.add_argument('--dry-run', action='store_true', help='Show what would be done without making changes')
+    parser.add_argument('--verbose', action='store_true', help='Enable verbose logging output')
+    parser.add_argument('--input-dir', type=Path, default=Path('takeout/maps'), help='Path to Google Takeout data directory')
+    parser.add_argument('--output-dir', type=Path, default=Path('data'), help='Path to output directory')
+    parser.add_argument('--resume', action='store_true', help='Resume pipeline from last completed step')
+    
+    return parser.parse_args()
+
+
+def setup_logging(verbose: bool = False):
+    """Configure logging based on verbosity level"""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        force=True
+    )
+
+
 def main():
-    if len(sys.argv) < 2:
-        print(__doc__.strip())
-        return
+    args = parse_arguments()
+    
+    # Setup logging
+    setup_logging(args.verbose)
+    
+    command = args.command
+    
+    # Handle pipeline command
+    if command == "run-pipeline":
+        pipeline = DataAnalysisPipeline(
+            input_dir=args.input_dir,
+            output_dir=args.output_dir,
+            dry_run=args.dry_run
+        )
+        success = pipeline.run_pipeline(resume=args.resume)
+        sys.exit(0 if success else 1)
 
-    command = sys.argv[1]
-
+    # Legacy command handling for backwards compatibility
     # TODO: glob for default filename
     if command == "extract-labeled-places":
         input_file = Path("takeout/maps/saved/My labeled places/Labeled places.json")
