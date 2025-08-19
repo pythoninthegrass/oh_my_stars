@@ -22,6 +22,8 @@ Usage:
 
 Commands:
     run-pipeline: Execute complete data analysis pipeline from start to finish
+    validate-data: Run comprehensive data validation suite
+    generate-test-data: Generate minimal test dataset for validation
     extract-labeled-places: Extract and group starred/labeled places by region
     extract-saved-places: Extract saved places with timestamps and integrate with regions
     extract-photo-metadata: Extract geolocation data from photo metadata
@@ -2302,6 +2304,543 @@ class DataAnalysisPipeline:
         return generator.generate_report(self.output_dir, self.output_dir)
 
 
+class DataValidator:
+    """Comprehensive data validation and testing utilities"""
+    
+    def __init__(self, input_dir: Path = Path("takeout/maps"), output_dir: Path = Path("data")):
+        self.input_dir = input_dir
+        self.output_dir = output_dir
+        self.validation_results = {
+            'input_validation': {},
+            'processing_validation': {},
+            'output_validation': {},
+            'errors': [],
+            'warnings': [],
+            'summary': {}
+        }
+    
+    def is_valid_coordinate(self, lat: float, lon: float) -> bool:
+        """Validate coordinate ranges"""
+        return -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0
+    
+    def is_valid_timestamp(self, timestamp_str: str) -> bool:
+        """Validate timestamp format and range"""
+        try:
+            dt = parse_date(timestamp_str)
+            # Reasonable date range: 1990 to 2030
+            return 1990 <= dt.year <= 2030
+        except Exception:
+            return False
+    
+    def validate_json_structure(self, file_path: Path, required_keys: list[str]) -> dict:
+        """Validate JSON file structure"""
+        result = {
+            'valid': True,
+            'exists': file_path.exists(),
+            'readable': False,
+            'valid_json': False,
+            'has_required_keys': False,
+            'missing_keys': [],
+            'file_size': 0,
+            'record_count': 0
+        }
+        
+        if not result['exists']:
+            result['valid'] = False
+            return result
+        
+        try:
+            result['file_size'] = file_path.stat().st_size
+            
+            with open(file_path) as f:
+                data = json.load(f)
+            
+            result['readable'] = True
+            result['valid_json'] = True
+            
+            # Check required keys
+            if isinstance(data, dict):
+                missing_keys = [key for key in required_keys if key not in data]
+                result['missing_keys'] = missing_keys
+                result['has_required_keys'] = len(missing_keys) == 0
+                
+                # Count records
+                if 'features' in data:
+                    result['record_count'] = len(data['features'])
+                elif 'places' in data:
+                    result['record_count'] = len(data['places'])
+                elif 'regions' in data:
+                    result['record_count'] = len(data['regions'])
+                else:
+                    result['record_count'] = len(data) if isinstance(data, list) else 1
+            
+            result['valid'] = result['has_required_keys']
+            
+        except json.JSONDecodeError:
+            result['valid'] = False
+            result['readable'] = True
+            result['valid_json'] = False
+        except Exception:
+            result['valid'] = False
+            result['readable'] = False
+        
+        return result
+    
+    def validate_input_files(self) -> bool:
+        """Validate all input files"""
+        logger.info("Validating input files...")
+        
+        input_files = {
+            'labeled_places': {
+                'path': self.input_dir / 'saved/My labeled places/Labeled places.json',
+                'required_keys': ['features']
+            },
+            'saved_places': {
+                'path': self.input_dir / 'your_places/Saved Places.json',
+                'required_keys': ['features']
+            },
+            'reviews': {
+                'path': self.input_dir / 'your_places/Reviews.json',
+                'required_keys': ['features']
+            }
+        }
+        
+        all_valid = True
+        
+        for file_type, config in input_files.items():
+            result = self.validate_json_structure(config['path'], config['required_keys'])
+            self.validation_results['input_validation'][file_type] = result
+            
+            if not result['valid']:
+                all_valid = False
+                if not result['exists']:
+                    self.validation_results['warnings'].append(f"Optional file missing: {config['path']}")
+                else:
+                    self.validation_results['errors'].append(f"Invalid {file_type}: {result['missing_keys']}")
+        
+        # Validate photo directory
+        photos_dir = self.input_dir / 'saved/Photos and videos'
+        photos_result = {
+            'exists': photos_dir.exists(),
+            'is_directory': photos_dir.is_dir() if photos_dir.exists() else False,
+            'file_count': 0,
+            'json_files': 0
+        }
+        
+        if photos_result['exists'] and photos_result['is_directory']:
+            json_files = list(photos_dir.glob('*.json'))
+            photos_result['file_count'] = len(list(photos_dir.iterdir()))
+            photos_result['json_files'] = len(json_files)
+        
+        self.validation_results['input_validation']['photos_directory'] = photos_result
+        
+        return all_valid
+    
+    def validate_coordinates_in_data(self) -> bool:
+        """Validate coordinates in all data sources"""
+        logger.info("Validating coordinates...")
+        
+        coordinate_errors = []
+        total_coordinates = 0
+        invalid_coordinates = 0
+        
+        # Check saved places
+        saved_places_file = self.output_dir / 'saved_places.json'
+        if saved_places_file.exists():
+            with open(saved_places_file) as f:
+                data = json.load(f)
+                
+            for place in data.get('places', []):
+                lat = place.get('latitude')
+                lon = place.get('longitude')
+                
+                if lat is not None and lon is not None:
+                    total_coordinates += 1
+                    if not self.is_valid_coordinate(lat, lon):
+                        invalid_coordinates += 1
+                        coordinate_errors.append(f"Invalid coordinates in saved place {place.get('id', 'unknown')}: ({lat}, {lon})")
+        
+        # Check photo metadata
+        photo_file = self.output_dir / 'photo_metadata.json'
+        if photo_file.exists():
+            with open(photo_file) as f:
+                data = json.load(f)
+                
+            for photo in data.get('photos', []):
+                coords = photo.get('coordinates') or {}
+                lat = coords.get('latitude')
+                lon = coords.get('longitude')
+                
+                if lat is not None and lon is not None:
+                    total_coordinates += 1
+                    if not self.is_valid_coordinate(lat, lon):
+                        invalid_coordinates += 1
+                        coordinate_errors.append(f"Invalid coordinates in photo {photo.get('filename', 'unknown')}: ({lat}, {lon})")
+        
+        self.validation_results['processing_validation']['coordinates'] = {
+            'total_coordinates': total_coordinates,
+            'invalid_coordinates': invalid_coordinates,
+            'error_rate': (invalid_coordinates / total_coordinates * 100) if total_coordinates > 0 else 0,
+            'errors': coordinate_errors[:10]  # Limit to first 10 errors
+        }
+        
+        self.validation_results['errors'].extend(coordinate_errors)
+        
+        return invalid_coordinates == 0
+    
+    def validate_regional_assignments(self) -> bool:
+        """Validate regional assignments and distance calculations"""
+        logger.info("Validating regional assignments...")
+        
+        regional_file = self.output_dir / 'regional_centers.json'
+        photo_locations_file = self.output_dir / 'photo_locations.json'
+        
+        if not regional_file.exists() or not photo_locations_file.exists():
+            self.validation_results['warnings'].append("Regional assignment files not found for validation")
+            return True
+        
+        with open(regional_file) as f:
+            regional_data = json.load(f)
+        
+        with open(photo_locations_file) as f:
+            photo_data = json.load(f)
+        
+        assignment_errors = []
+        total_assignments = 0
+        invalid_assignments = 0
+        
+        for region_name, region_info in photo_data.get('regions', {}).items():
+            region_center = regional_data.get('regions', {}).get(region_name, {}).get('center', {})
+            
+            if not region_center:
+                continue
+            
+            center_lat = region_center.get('latitude')
+            center_lon = region_center.get('longitude')
+            
+            for photo in region_info.get('photos', []):
+                photo_coords = photo.get('coordinates', {})
+                photo_lat = photo_coords.get('latitude')
+                photo_lon = photo_coords.get('longitude')
+                
+                if all(coord is not None for coord in [center_lat, center_lon, photo_lat, photo_lon]):
+                    total_assignments += 1
+                    
+                    # Calculate distance
+                    distance = geodesic((photo_lat, photo_lon), (center_lat, center_lon)).miles
+                    
+                    # Check if assignment is reasonable (within 50 miles as a liberal threshold)
+                    if distance > 50:
+                        invalid_assignments += 1
+                        assignment_errors.append(f"Photo {photo.get('filename', 'unknown')} assigned to distant region {region_name}: {distance:.1f} miles")
+        
+        self.validation_results['processing_validation']['regional_assignments'] = {
+            'total_assignments': total_assignments,
+            'invalid_assignments': invalid_assignments,
+            'error_rate': (invalid_assignments / total_assignments * 100) if total_assignments > 0 else 0,
+            'errors': assignment_errors[:10]
+        }
+        
+        self.validation_results['errors'].extend(assignment_errors)
+        
+        return invalid_assignments == 0
+    
+    def validate_output_files(self) -> bool:
+        """Validate all output files"""
+        logger.info("Validating output files...")
+        
+        output_files = {
+            'labeled_places': {
+                'path': self.output_dir / 'labeled_places.json',
+                'required_keys': ['metadata', 'places']
+            },
+            'regional_centers': {
+                'path': self.output_dir / 'regional_centers.json',
+                'required_keys': ['metadata', 'regions']
+            },
+            'saved_places': {
+                'path': self.output_dir / 'saved_places.json',
+                'required_keys': ['metadata', 'places']
+            },
+            'photo_metadata': {
+                'path': self.output_dir / 'photo_metadata.json',
+                'required_keys': ['metadata', 'photos']
+            },
+            'photo_locations': {
+                'path': self.output_dir / 'photo_locations.json',
+                'required_keys': ['metadata', 'regions']
+            },
+            'review_visits': {
+                'path': self.output_dir / 'review_visits.json',
+                'required_keys': ['metadata', 'reviews']
+            },
+            'visit_timeline': {
+                'path': self.output_dir / 'visit_timeline.json',
+                'required_keys': ['metadata', 'regions']
+            }
+        }
+        
+        all_valid = True
+        
+        for file_type, config in output_files.items():
+            result = self.validate_json_structure(config['path'], config['required_keys'])
+            self.validation_results['output_validation'][file_type] = result
+            
+            if not result['valid']:
+                all_valid = False
+                if not result['exists']:
+                    self.validation_results['errors'].append(f"Missing output file: {config['path']}")
+                else:
+                    self.validation_results['errors'].append(f"Invalid output {file_type}: {result['missing_keys']}")
+        
+        # Validate summary report
+        summary_report = self.output_dir / 'summary_report.md'
+        report_result = {
+            'exists': summary_report.exists(),
+            'size': summary_report.stat().st_size if summary_report.exists() else 0,
+            'valid': False
+        }
+        
+        if report_result['exists'] and report_result['size'] > 0:
+            # Basic markdown validation
+            try:
+                with open(summary_report) as f:
+                    content = f.read()
+                    report_result['valid'] = '# Google Maps Travel Analysis Report' in content
+            except Exception:
+                report_result['valid'] = False
+        
+        self.validation_results['output_validation']['summary_report'] = report_result
+        
+        return all_valid
+    
+    def validate_cache_integrity(self) -> bool:
+        """Validate geocoding cache integrity"""
+        logger.info("Validating cache integrity...")
+        
+        cache_file = self.output_dir / 'geocoding_cache.json'
+        
+        if not cache_file.exists():
+            self.validation_results['warnings'].append("Geocoding cache not found")
+            return True
+        
+        cache_result = self.validate_json_structure(cache_file, ['metadata', 'entries'])
+        self.validation_results['processing_validation']['cache'] = cache_result
+        
+        if not cache_result['valid']:
+            self.validation_results['errors'].append("Invalid geocoding cache structure")
+            return False
+        
+        # Validate cache entries
+        try:
+            with open(cache_file) as f:
+                cache_data = json.load(f)
+            
+            invalid_entries = 0
+            total_entries = len(cache_data.get('entries', {}))
+            
+            for entry in cache_data.get('entries', {}).values():
+                if not isinstance(entry, dict) or 'timestamp' not in entry or not self.is_valid_timestamp(entry['timestamp']):
+                    invalid_entries += 1
+            
+            cache_result['invalid_entries'] = invalid_entries
+            cache_result['valid_entries'] = total_entries - invalid_entries
+            
+            if invalid_entries > 0:
+                self.validation_results['warnings'].append(f"Found {invalid_entries} invalid cache entries")
+        
+        except Exception as e:
+            self.validation_results['errors'].append(f"Error validating cache entries: {e}")
+            return False
+        
+        return True
+    
+    def generate_test_data(self) -> bool:
+        """Generate minimal test dataset for validation"""
+        logger.info("Generating test data...")
+        
+        test_dir = Path("test_data")
+        test_dir.mkdir(exist_ok=True)
+        
+        # Generate test labeled places
+        test_labeled_places = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "Title": "Test Location 1",
+                        "Published": "2024-01-15T10:00:00.000Z",
+                        "Updated": "2024-01-15T10:00:00.000Z",
+                        "Google Maps URL": "https://maps.google.com/?cid=123456789"
+                    },
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [-122.4194, 37.7749]
+                    }
+                },
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "Title": "Test Location 2",
+                        "Published": "2024-01-16T14:30:00.000Z",
+                        "Updated": "2024-01-16T14:30:00.000Z",
+                        "Google Maps URL": "https://maps.google.com/?cid=987654321"
+                    },
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [-74.0060, 40.7128]
+                    }
+                }
+            ]
+        }
+        
+        # Generate test saved places
+        test_saved_places = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "Title": "Test Restaurant",
+                        "Date": "2024-01-15T12:00:00.000Z",
+                        "Google Maps URL": "https://maps.google.com/?cid=111222333"
+                    },
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [-122.4194, 37.7749]
+                    }
+                }
+            ]
+        }
+        
+        # Generate test reviews
+        test_reviews = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "Google Maps URL": "https://maps.google.com/?cid=111222333",
+                        "Location": {
+                            "Business Name": "Test Business",
+                            "Address": "123 Test St, San Francisco, CA",
+                            "Country Code": "US"
+                        },
+                        "Published": "2024-01-15T15:00:00.000Z"
+                    },
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [-122.4194, 37.7749]
+                    }
+                }
+            ]
+        }
+        
+        # Write test files
+        try:
+            with open(test_dir / 'labeled_places.json', 'w') as f:
+                json.dump(test_labeled_places, f, indent=2)
+            
+            with open(test_dir / 'saved_places.json', 'w') as f:
+                json.dump(test_saved_places, f, indent=2)
+            
+            with open(test_dir / 'reviews.json', 'w') as f:
+                json.dump(test_reviews, f, indent=2)
+            
+            logger.info(f"Test data generated in {test_dir}")
+            return True
+            
+        except Exception as e:
+            self.validation_results['errors'].append(f"Error generating test data: {e}")
+            return False
+    
+    def run_full_validation(self) -> bool:
+        """Run complete validation suite"""
+        logger.info("Running full data validation suite...")
+        
+        # Run all validation checks
+        input_valid = self.validate_input_files()
+        coord_valid = self.validate_coordinates_in_data()
+        regional_valid = self.validate_regional_assignments()
+        output_valid = self.validate_output_files()
+        cache_valid = self.validate_cache_integrity()
+        
+        # Generate summary
+        self.validation_results['summary'] = {
+            'input_validation': input_valid,
+            'coordinate_validation': coord_valid,
+            'regional_validation': regional_valid,
+            'output_validation': output_valid,
+            'cache_validation': cache_valid,
+            'overall_valid': all([input_valid, coord_valid, regional_valid, output_valid, cache_valid]),
+            'total_errors': len(self.validation_results['errors']),
+            'total_warnings': len(self.validation_results['warnings'])
+        }
+        
+        return self.validation_results['summary']['overall_valid']
+    
+    def generate_validation_report(self) -> str:
+        """Generate detailed validation report"""
+        lines = [
+            "# Data Validation Report",
+            "",
+            f"**Generated:** {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}",
+            "",
+            "## Summary",
+            ""
+        ]
+        
+        summary = self.validation_results['summary']
+        status_emoji = "✅" if summary.get('overall_valid', False) else "❌"
+        
+        lines.extend([
+            f"{status_emoji} **Overall Status:** {'VALID' if summary.get('overall_valid', False) else 'INVALID'}",
+            f"- **Errors:** {summary.get('total_errors', 0)}",
+            f"- **Warnings:** {summary.get('total_warnings', 0)}",
+            ""
+        ])
+        
+        # Validation sections
+        sections = [
+            ('Input Validation', 'input_validation'),
+            ('Coordinate Validation', 'coordinate_validation'),
+            ('Regional Assignment Validation', 'regional_validation'),
+            ('Output Validation', 'output_validation'),
+            ('Cache Validation', 'cache_validation')
+        ]
+        
+        for section_name, section_key in sections:
+            status = "✅ PASS" if summary.get(section_key, False) else "❌ FAIL"
+            lines.extend([
+                f"### {section_name}",
+                f"**Status:** {status}",
+                ""
+            ])
+        
+        # Error details
+        if self.validation_results['errors']:
+            lines.extend([
+                "## Errors",
+                ""
+            ])
+            for error in self.validation_results['errors'][:20]:  # Limit to first 20
+                lines.append(f"- {error}")
+            lines.append("")
+        
+        # Warning details
+        if self.validation_results['warnings']:
+            lines.extend([
+                "## Warnings",
+                ""
+            ])
+            for warning in self.validation_results['warnings'][:20]:  # Limit to first 20
+                lines.append(f"- {warning}")
+            lines.append("")
+        
+        return '\n'.join(lines)
+
+
 def parse_arguments():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(
@@ -2346,6 +2885,57 @@ def main():
             dry_run=args.dry_run
         )
         success = pipeline.run_pipeline(resume=args.resume)
+        sys.exit(0 if success else 1)
+
+    # Handle validation commands
+    elif command == "validate-data":
+        validator = DataValidator(
+            input_dir=args.input_dir,
+            output_dir=args.output_dir
+        )
+        
+        if args.dry_run:
+            logger.info("DRY RUN: Would run full data validation suite")
+            sys.exit(0)
+        
+        success = validator.run_full_validation()
+        
+        # Generate and save validation report
+        report = validator.generate_validation_report()
+        report_file = args.output_dir / 'validation_report.md'
+        
+        try:
+            args.output_dir.mkdir(exist_ok=True)
+            with open(report_file, 'w') as f:
+                f.write(report)
+            logger.info(f"Validation report written to {report_file}")
+        except Exception as e:
+            logger.error(f"Failed to write validation report: {e}")
+        
+        # Print summary
+        summary = validator.validation_results['summary']
+        status = "✅ VALID" if success else "❌ INVALID"
+        print(f"\n=== Data Validation Results ===")
+        print(f"Overall Status: {status}")
+        print(f"Errors: {summary.get('total_errors', 0)}")
+        print(f"Warnings: {summary.get('total_warnings', 0)}")
+        print(f"Report: {report_file}")
+        
+        sys.exit(0 if success else 1)
+
+    elif command == "generate-test-data":
+        validator = DataValidator()
+        
+        if args.dry_run:
+            logger.info("DRY RUN: Would generate test data")
+            sys.exit(0)
+        
+        success = validator.generate_test_data()
+        if success:
+            logger.info("✅ Test data generated successfully in test_data/ directory")
+        else:
+            logger.error("❌ Failed to generate test data")
+        
         sys.exit(0 if success else 1)
 
     # Legacy command handling for backwards compatibility

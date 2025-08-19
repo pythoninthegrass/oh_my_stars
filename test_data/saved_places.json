@@ -1,0 +1,20 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "Title": "Test Restaurant",
+        "Date": "2024-01-15T12:00:00.000Z",
+        "Google Maps URL": "https://maps.google.com/?cid=111222333"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -122.4194,
+          37.7749
+        ]
+      }
+    }
+  ]
+}
