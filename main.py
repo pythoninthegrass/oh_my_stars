@@ -23,7 +23,6 @@ Usage:
 Commands:
     run-pipeline: Execute complete data analysis pipeline from start to finish
     validate-data: Run comprehensive data validation suite
-    generate-test-data: Generate minimal test dataset for validation
     extract-labeled-places: Extract and group starred/labeled places by region
     extract-saved-places: Extract saved places with timestamps and integrate with regions
     extract-photo-metadata: Extract geolocation data from photo metadata
@@ -2655,105 +2654,6 @@ class DataValidator:
 
         return True
 
-    def generate_test_data(self) -> bool:
-        """Generate minimal test dataset for validation"""
-        logger.info("Generating test data...")
-
-        test_dir = Path("test_data")
-        test_dir.mkdir(exist_ok=True)
-
-        # Generate test labeled places
-        test_labeled_places = {
-            "type": "FeatureCollection",
-            "features": [
-                {
-                    "type": "Feature",
-                    "properties": {
-                        "Title": "Test Location 1",
-                        "Published": "2024-01-15T10:00:00.000Z",
-                        "Updated": "2024-01-15T10:00:00.000Z",
-                        "Google Maps URL": "https://maps.google.com/?cid=123456789"
-                    },
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [-122.4194, 37.7749]
-                    }
-                },
-                {
-                    "type": "Feature",
-                    "properties": {
-                        "Title": "Test Location 2",
-                        "Published": "2024-01-16T14:30:00.000Z",
-                        "Updated": "2024-01-16T14:30:00.000Z",
-                        "Google Maps URL": "https://maps.google.com/?cid=987654321"
-                    },
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [-74.0060, 40.7128]
-                    }
-                }
-            ]
-        }
-
-        # Generate test saved places
-        test_saved_places = {
-            "type": "FeatureCollection",
-            "features": [
-                {
-                    "type": "Feature",
-                    "properties": {
-                        "Title": "Test Restaurant",
-                        "Date": "2024-01-15T12:00:00.000Z",
-                        "Google Maps URL": "https://maps.google.com/?cid=111222333"
-                    },
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [-122.4194, 37.7749]
-                    }
-                }
-            ]
-        }
-
-        # Generate test reviews
-        test_reviews = {
-            "type": "FeatureCollection",
-            "features": [
-                {
-                    "type": "Feature",
-                    "properties": {
-                        "Google Maps URL": "https://maps.google.com/?cid=111222333",
-                        "Location": {
-                            "Business Name": "Test Business",
-                            "Address": "123 Test St, San Francisco, CA",
-                            "Country Code": "US"
-                        },
-                        "Published": "2024-01-15T15:00:00.000Z"
-                    },
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [-122.4194, 37.7749]
-                    }
-                }
-            ]
-        }
-
-        # Write test files
-        try:
-            with open(test_dir / 'labeled_places.json', 'w') as f:
-                json.dump(test_labeled_places, f, indent=2)
-
-            with open(test_dir / 'saved_places.json', 'w') as f:
-                json.dump(test_saved_places, f, indent=2)
-
-            with open(test_dir / 'reviews.json', 'w') as f:
-                json.dump(test_reviews, f, indent=2)
-
-            logger.info(f"Test data generated in {test_dir}")
-            return True
-
-        except Exception as e:
-            self.validation_results['errors'].append(f"Error generating test data: {e}")
-            return False
 
     def run_full_validation(self) -> bool:
         """Run complete validation suite"""
@@ -2923,20 +2823,6 @@ def main():
 
         sys.exit(0 if success else 1)
 
-    elif command == "generate-test-data":
-        validator = DataValidator()
-
-        if args.dry_run:
-            logger.info("DRY RUN: Would generate test data")
-            sys.exit(0)
-
-        success = validator.generate_test_data()
-        if success:
-            logger.info("✅ Test data generated successfully in test_data/ directory")
-        else:
-            logger.error("❌ Failed to generate test data")
-
-        sys.exit(0 if success else 1)
 
     # Legacy command handling for backwards compatibility
     # TODO: glob for default filename
