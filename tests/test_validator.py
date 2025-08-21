@@ -130,12 +130,12 @@ class TestDataValidator:
         # Create saved places file
         your_places_dir = input_dir / 'your_places'
         your_places_dir.mkdir(parents=True)
-        saved_file = your_places_dir / 'Saved Places.json'
+        saved_file = your_places_dir / 'saved_places.json'
         with open(saved_file, 'w') as f:
             json.dump({"features": []}, f)
 
         # Create reviews file
-        reviews_file = your_places_dir / 'Reviews.json'
+        reviews_file = your_places_dir / 'reviews.json'
         with open(reviews_file, 'w') as f:
             json.dump({"features": []}, f)
 
@@ -208,9 +208,9 @@ class TestDataValidator:
 
         your_places_dir = input_dir / 'your_places'
         your_places_dir.mkdir(parents=True)
-        with open(your_places_dir / 'Saved Places.json', 'w') as f:
+        with open(your_places_dir / 'saved_places.json', 'w') as f:
             json.dump({"features": []}, f)
-        with open(your_places_dir / 'Reviews.json', 'w') as f:
+        with open(your_places_dir / 'reviews.json', 'w') as f:
             json.dump({"features": []}, f)
 
         # Create output files

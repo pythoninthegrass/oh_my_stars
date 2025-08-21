@@ -93,6 +93,16 @@ class TestDataAnalysisPipeline:
         labeled_dir.mkdir(parents=True)
         with open(labeled_dir / "Labeled places.json", 'w') as f:
             json.dump({"features": []}, f)
+        
+        your_places_dir = pipeline.input_dir / "your_places"
+        your_places_dir.mkdir(parents=True)
+        with open(your_places_dir / "saved_places.json", 'w') as f:
+            json.dump({"features": []}, f)
+        with open(your_places_dir / "reviews.json", 'w') as f:
+            json.dump({"features": []}, f)
+        
+        photos_dir = pipeline.input_dir / "saved/Photos and videos"
+        photos_dir.mkdir(parents=True)
 
         success = pipeline.run_pipeline()
         assert success  # Dry run always succeeds
@@ -119,8 +129,13 @@ class TestDataAnalysisPipeline:
 
         your_places_dir = pipeline.input_dir / "your_places"
         your_places_dir.mkdir()
-        with open(your_places_dir / "Saved Places.json", 'w') as f:
+        with open(your_places_dir / "saved_places.json", 'w') as f:
             json.dump({"features": []}, f)
+        with open(your_places_dir / "reviews.json", 'w') as f:
+            json.dump({"features": []}, f)
+        
+        photos_dir = pipeline.input_dir / "saved/Photos and videos"
+        photos_dir.mkdir(parents=True)
 
         # Run pipeline
         success = pipeline.run_pipeline()
