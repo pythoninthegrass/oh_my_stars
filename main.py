@@ -21,6 +21,7 @@ Usage:
     main.py <command> [options]
 
 Commands:
+    extract-takeout: Extract and organize Google Takeout zip file into proper directory structure
     run-pipeline: Execute complete data analysis pipeline from start to finish
     validate-data: Run comprehensive data validation suite
     extract-labeled-places: Extract and group starred/labeled places by region
@@ -43,9 +44,11 @@ Options:
 import argparse
 import json
 import logging
+import shutil
 import ssl
 import sys
 import time
+import zipfile
 from datetime import UTC, datetime, timezone
 from dateutil.parser import parse as parse_date
 from geopy.distance import geodesic
@@ -56,6 +59,112 @@ from typing import Optional
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+class TakeoutExtractor:
+    """Extract and organize Google Takeout zip files into proper directory structure"""
+    
+    def __init__(self, output_dir: Path = Path("takeout")):
+        self.output_dir = output_dir
+    
+    def find_takeout_zip(self, search_dir: Path = Path(".")) -> Path | None:
+        """Find takeout zip file matching the expected pattern"""
+        pattern = "takeout-*.zip"
+        zip_files = list(search_dir.glob(pattern))
+        
+        if not zip_files:
+            logger.error(f"No takeout zip files found matching pattern '{pattern}' in {search_dir}")
+            return None
+        
+        if len(zip_files) > 1:
+            logger.warning(f"Multiple takeout zip files found: {[f.name for f in zip_files]}")
+            logger.info(f"Using most recent: {max(zip_files, key=lambda f: f.stat().st_mtime).name}")
+        
+        return max(zip_files, key=lambda f: f.stat().st_mtime)
+    
+    def extract_takeout(self, zip_path: Path | None = None, cleanup: bool = False) -> bool:
+        """
+        Extract Google Takeout zip file and organize into proper directory structure
+        
+        Args:
+            zip_path: Path to takeout zip file (auto-detected if None)
+            cleanup: Whether to delete the original zip file after extraction
+            
+        Returns:
+            bool: True if extraction successful, False otherwise
+        """
+        try:
+            # Auto-detect zip file if not provided
+            if zip_path is None:
+                zip_path = self.find_takeout_zip()
+                if zip_path is None:
+                    return False
+            
+            if not zip_path.exists():
+                logger.error(f"Zip file not found: {zip_path}")
+                return False
+            
+            logger.info(f"Extracting takeout from: {zip_path}")
+            
+            # Create temporary extraction directory
+            temp_dir = Path("temp_takeout_extract")
+            if temp_dir.exists():
+                shutil.rmtree(temp_dir)
+            temp_dir.mkdir()
+            
+            try:
+                # Extract zip file
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(temp_dir)
+                
+                # Find extracted Maps (your places) directory
+                maps_dir = temp_dir / "Takeout" / "Maps (your places)"
+                if not maps_dir.exists():
+                    logger.error("Maps (your places) directory not found in extracted files")
+                    return False
+                
+                # Create output directory structure
+                output_maps_dir = self.output_dir / "maps" / "your_places"
+                output_maps_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Move required JSON files with normalized names
+                files_moved = 0
+                required_files = {
+                    "Reviews.json": "reviews.json",
+                    "Saved Places.json": "saved_places.json"
+                }
+                
+                for source_filename, dest_filename in required_files.items():
+                    source_file = maps_dir / source_filename
+                    if source_file.exists():
+                        dest_file = output_maps_dir / dest_filename
+                        shutil.copy2(source_file, dest_file)
+                        logger.info(f"Extracted: {source_filename} -> {dest_filename} ({source_file.stat().st_size} bytes)")
+                        files_moved += 1
+                    else:
+                        logger.warning(f"File not found in takeout: {source_filename}")
+                
+                if files_moved == 0:
+                    logger.error("No required files found in takeout")
+                    return False
+                
+                logger.info(f"Successfully extracted {files_moved}/{len(required_files)} files to {output_maps_dir}")
+                
+                # Clean up original zip file if requested
+                if cleanup:
+                    zip_path.unlink()
+                    logger.info(f"Deleted original zip file: {zip_path}")
+                
+                return True
+                
+            finally:
+                # Always clean up temporary directory
+                if temp_dir.exists():
+                    shutil.rmtree(temp_dir)
+                
+        except Exception as e:
+            logger.error(f"Error extracting takeout: {e}")
+            return False
 
 
 class GeocodingCache:
@@ -2107,7 +2216,7 @@ class DataAnalysisPipeline:
             {
                 'name': 'extract-saved-places',
                 'description': 'Extract saved places with timestamps',
-                'required_files': ['your_places/Saved Places.json'],
+                'required_files': ['your_places/saved_places.json'],
                 'output_files': ['saved_places.json'],
                 'dependencies': ['extract-labeled-places'],
                 'function': self._run_saved_places
@@ -2130,7 +2239,7 @@ class DataAnalysisPipeline:
             {
                 'name': 'extract-review-visits',
                 'description': 'Extract review timestamps as visit confirmations',
-                'required_files': ['your_places/Reviews.json'],
+                'required_files': ['your_places/reviews.json'],
                 'output_files': ['review_visits.json'],
                 'dependencies': ['extract-labeled-places'],
                 'function': self._run_review_visits
@@ -2271,7 +2380,7 @@ class DataAnalysisPipeline:
 
     def _run_saved_places(self) -> bool:
         """Execute saved places extraction"""
-        input_file = self.input_dir / "your_places/Saved Places.json"
+        input_file = self.input_dir / "your_places/saved_places.json"
         extractor = SavedPlacesExtractor()
         return extractor.process_saved_places(input_file, self.output_dir)
 
@@ -2288,7 +2397,7 @@ class DataAnalysisPipeline:
 
     def _run_review_visits(self) -> bool:
         """Execute review visits extraction"""
-        reviews_file = self.input_dir / "your_places/Reviews.json"
+        reviews_file = self.input_dir / "your_places/reviews.json"
         extractor = ReviewVisitsExtractor()
         return extractor.extract_review_visits(reviews_file, self.output_dir, self.output_dir)
 
@@ -2395,11 +2504,11 @@ class DataValidator:
                 'required_keys': ['features']
             },
             'saved_places': {
-                'path': self.input_dir / 'your_places/Saved Places.json',
+                'path': self.input_dir / 'your_places/saved_places.json',
                 'required_keys': ['features']
             },
             'reviews': {
-                'path': self.input_dir / 'your_places/Reviews.json',
+                'path': self.input_dir / 'your_places/reviews.json',
                 'required_keys': ['features']
             }
         }
@@ -2755,6 +2864,10 @@ def parse_arguments():
     parser.add_argument('--input-dir', type=Path, default=Path('takeout/maps'), help='Path to Google Takeout data directory')
     parser.add_argument('--output-dir', type=Path, default=Path('data'), help='Path to output directory')
     parser.add_argument('--resume', action='store_true', help='Resume pipeline from last completed step')
+    
+    # Extract takeout specific options
+    parser.add_argument('--zip-file', type=str, help='Path to takeout zip file (auto-detected if not provided)')
+    parser.add_argument('--cleanup', action='store_true', help='Delete original zip file after successful extraction')
 
     return parser.parse_args()
 
@@ -2777,8 +2890,16 @@ def main():
 
     command = args.command
 
+    # Handle extract takeout command
+    if command == "extract-takeout":
+        extractor = TakeoutExtractor()
+        zip_path = Path(args.zip_file) if hasattr(args, 'zip_file') and args.zip_file else None
+        cleanup = getattr(args, 'cleanup', False)
+        success = extractor.extract_takeout(zip_path=zip_path, cleanup=cleanup)
+        sys.exit(0 if success else 1)
+
     # Handle pipeline command
-    if command == "run-pipeline":
+    elif command == "run-pipeline":
         pipeline = DataAnalysisPipeline(
             input_dir=args.input_dir,
             output_dir=args.output_dir,
@@ -2839,7 +2960,7 @@ def main():
         sys.exit(0 if success else 1)
 
     elif command == "extract-saved-places":
-        input_file = Path("takeout/maps/your_places/Saved Places.json")
+        input_file = Path("takeout/maps/your_places/saved_places.json")
         output_dir = Path("data")
 
         if not input_file.exists():
@@ -2875,7 +2996,7 @@ def main():
         sys.exit(0 if success else 1)
 
     elif command == "extract-review-visits":
-        reviews_file = Path("takeout/maps/your_places/Reviews.json")
+        reviews_file = Path("takeout/maps/your_places/reviews.json")
         data_dir = Path("data")
         output_dir = Path("data")
 
