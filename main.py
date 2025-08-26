@@ -1,16 +1,4 @@
-#!/usr/bin/env -S uv run --script
-
-# /// script
-# requires-python = ">=3.13"
-# dependencies = [
-#     "geopy>=2.4.1",
-#     "httpx>=0.26.0",
-#     "python-dateutil>=2.9.0",
-#     "python-decouple>=3.8",
-# ]
-# [tool.uv]
-# exclude-newer = "2025-08-31T00:00:00Z"
-# ///
+#!/usr/bin/env python
 
 """
 Oh My Stars - Google Takeout Maps Data Processor
@@ -52,6 +40,36 @@ import ssl
 import sys
 import time
 import zipfile
+from config import (
+    CACHE_DIR,
+    DEDUPLICATION_WINDOW_HOURS,
+    GEOCODING_CACHE_EXPIRATION_DAYS,
+    GEOCODING_CACHE_FILE,
+    INPUT_DIR,
+    LABELED_PLACES_FILE,
+    MAX_VALID_LATITUDE,
+    MAX_VALID_LONGITUDE,
+    MAX_VALID_YEAR,
+    MIN_VALID_LATITUDE,
+    MIN_VALID_LONGITUDE,
+    MIN_VALID_YEAR,
+    NY_SAVED_PLACES_FILE,
+    OUTPUT_DIR,
+    PHOTO_LOCATIONS_FILE,
+    PHOTO_METADATA_FILE,
+    PIPELINE_STEPS,
+    PLACE_MATCHING_TOLERANCE_MILES,
+    REGION_DISTANCE_THRESHOLD_MILES,
+    REGIONAL_CENTERS_FILE,
+    REVIEW_VISITS_FILE,
+    SAVED_PLACES_FILE,
+    SERPAPI_CACHE_FILE,
+    SUMMARY_REPORT_FILE,
+    TAKEOUT_FILE_MAPPINGS,
+    TEMP_EXTRACT_DIR,
+    VALIDATION_REPORT_FILE,
+    VISIT_TIMELINE_FILE,
+)
 from datetime import UTC, datetime, timezone
 from dateutil.parser import parse as parse_date
 from decouple import config
@@ -60,10 +78,6 @@ from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from geopy.geocoders import Nominatim
 from pathlib import Path
 from typing import Optional
-
-INPUT_DIR = Path(config('INPUT_DIR', default='takeout/maps'))
-OUTPUT_DIR = Path(config('OUTPUT_DIR', default='results'))
-CACHE_DIR = Path(config('CACHE_DIR', default='data'))
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -115,7 +129,7 @@ class TakeoutExtractor:
             logger.info(f"Extracting takeout from: {zip_path}")
 
             # Create temporary extraction directory
-            temp_dir = Path("temp_takeout_extract")
+            temp_dir = Path(TEMP_EXTRACT_DIR)
             if temp_dir.exists():
                 shutil.rmtree(temp_dir)
             temp_dir.mkdir()
@@ -137,7 +151,7 @@ class TakeoutExtractor:
 
                 # Move required JSON files with normalized names
                 files_moved = 0
-                required_files = {"Reviews.json": "reviews.json", "Saved Places.json": "saved_places.json"}
+                required_files = TAKEOUT_FILE_MAPPINGS
 
                 for source_filename, dest_filename in required_files.items():
                     source_file = maps_dir / source_filename
@@ -175,7 +189,9 @@ class TakeoutExtractor:
 class GeocodingCache:
     """Comprehensive file-based cache for geocoding results with rate limiting and expiration"""
 
-    def __init__(self, cache_file: Path = CACHE_DIR / "geocoding_cache.json", expiration_days: int = 30):
+    def __init__(
+        self, cache_file: Path = CACHE_DIR / GEOCODING_CACHE_FILE, expiration_days: int = GEOCODING_CACHE_EXPIRATION_DAYS
+    ):
         self.cache_file = cache_file
         self.expiration_days = expiration_days
         self.last_api_call = 0  # Timestamp of last API call for rate limiting
@@ -580,7 +596,7 @@ class LabeledPlacesExtractor:
                 'places': places,
             }
 
-            with open(output_dir / 'labeled_places.json', 'w') as f:
+            with open(output_dir / LABELED_PLACES_FILE, 'w') as f:
                 json.dump(labeled_places_output, f, indent=2)
 
             # Write regional centers
@@ -593,7 +609,7 @@ class LabeledPlacesExtractor:
                 'regions': regions,
             }
 
-            with open(output_dir / 'regional_centers.json', 'w') as f:
+            with open(output_dir / REGIONAL_CENTERS_FILE, 'w') as f:
                 json.dump(regional_centers_output, f, indent=2)
 
             logger.info(f"Successfully processed {len(places)} places into {len(regions)} regions")
@@ -845,7 +861,7 @@ class SavedPlacesExtractor:
                 'places': saved_places,
             }
 
-            with open(output_dir / 'saved_places.json', 'w') as f:
+            with open(output_dir / SAVED_PLACES_FILE, 'w') as f:
                 json.dump(saved_places_output, f, indent=2)
 
             # Write updated regional centers
@@ -860,7 +876,7 @@ class SavedPlacesExtractor:
                 'regions': updated_regions,
             }
 
-            with open(output_dir / 'regional_centers.json', 'w') as f:
+            with open(output_dir / REGIONAL_CENTERS_FILE, 'w') as f:
                 json.dump(updated_regional_output, f, indent=2)
 
             logger.info(f"Successfully processed {len(saved_places)} saved places")
@@ -883,7 +899,7 @@ class PhotoMetadataExtractor:
 
     def validate_coordinates(self, lat: float, lon: float) -> bool:
         """Validate coordinate ranges"""
-        return -90 <= lat <= 90 and -180 <= lon <= 180
+        return MIN_VALID_LATITUDE <= lat <= MAX_VALID_LATITUDE and MIN_VALID_LONGITUDE <= lon <= MAX_VALID_LONGITUDE
 
     def parse_timestamp_from_epoch(self, timestamp_str: str) -> str | None:
         """Convert epoch timestamp to ISO format"""
@@ -915,7 +931,7 @@ class PhotoMetadataExtractor:
                 }
 
                 output_dir.mkdir(exist_ok=True)
-                with open(output_dir / 'photo_metadata.json', 'w') as f:
+                with open(output_dir / PHOTO_METADATA_FILE, 'w') as f:
                     json.dump(empty_metadata, f, indent=2)
 
                 logger.info("Created empty photo metadata file")
@@ -939,7 +955,7 @@ class PhotoMetadataExtractor:
                 }
 
                 output_dir.mkdir(exist_ok=True)
-                with open(output_dir / 'photo_metadata.json', 'w') as f:
+                with open(output_dir / PHOTO_METADATA_FILE, 'w') as f:
                     json.dump(empty_metadata, f, indent=2)
 
                 return True
@@ -1045,7 +1061,7 @@ class PhotoMetadataExtractor:
             logger.info(f"Successfully processed {total_photos} photo metadata files")
             logger.info(f"Found {geotagged_count} geotagged photos ({(geotagged_count / total_photos * 100):.1f}%)")
             logger.info(f"Date range: {date_range.get('earliest', 'N/A')} to {date_range.get('latest', 'N/A')}")
-            logger.info(f"Output written to {output_dir / 'photo_metadata.json'}")
+            logger.info(f"Output written to {output_dir / PHOTO_METADATA_FILE}")
 
             return True
 
@@ -1058,7 +1074,7 @@ class PhotoLocationCorrelator:
     """Correlate geotagged photos to regions and saved places"""
 
     def __init__(self):
-        self.region_distance_threshold_miles = 10.0
+        self.region_distance_threshold_miles = REGION_DISTANCE_THRESHOLD_MILES
         self.place_distance_threshold_miles = 0.1
 
     def load_existing_data(self, data_dir: Path) -> tuple[dict, dict, dict]:
@@ -1068,13 +1084,13 @@ class PhotoLocationCorrelator:
         photo_metadata = {}
 
         # Load regional centers
-        regional_file = data_dir / 'regional_centers.json'
+        regional_file = data_dir / REGIONAL_CENTERS_FILE
         if regional_file.exists():
             with open(regional_file) as f:
                 regional_centers = json.load(f)
 
         # Load saved places
-        saved_file = data_dir / 'saved_places.json'
+        saved_file = data_dir / SAVED_PLACES_FILE
         if saved_file.exists():
             with open(saved_file) as f:
                 saved_places = json.load(f)
@@ -1090,7 +1106,7 @@ class PhotoLocationCorrelator:
                 saved_places['places'].extend(labeled_places.get('places', []))
 
         # Load photo metadata
-        photo_file = data_dir / 'photo_metadata.json'
+        photo_file = data_dir / PHOTO_METADATA_FILE
         if photo_file.exists():
             with open(photo_file) as f:
                 photo_metadata = json.load(f)
@@ -1189,7 +1205,7 @@ class PhotoLocationCorrelator:
                 }
 
                 output_dir.mkdir(exist_ok=True)
-                with open(output_dir / 'photo_locations.json', 'w') as f:
+                with open(output_dir / PHOTO_LOCATIONS_FILE, 'w') as f:
                     json.dump(empty_locations, f, indent=2)
 
                 return True
@@ -1282,7 +1298,7 @@ class PhotoLocationCorrelator:
             logger.info(f"Successfully correlated {len(geotagged_photos)} photos")
             logger.info(f"Matched {sum(len(photos) for photos in region_groups.values())} photos to {len(region_groups)} regions")
             logger.info(f"Found {len(unmatched_photos)} unmatched photos")
-            logger.info(f"Output written to {output_dir / 'photo_locations.json'}")
+            logger.info(f"Output written to {output_dir / PHOTO_LOCATIONS_FILE}")
 
             return True
 
@@ -1295,8 +1311,8 @@ class ReviewVisitsExtractor:
     """Extract review timestamps as visit confirmations"""
 
     def __init__(self):
-        self.place_matching_tolerance_miles = 0.25  # Quarter mile for fuzzy matching
-        self.region_distance_threshold_miles = 10.0
+        self.place_matching_tolerance_miles = PLACE_MATCHING_TOLERANCE_MILES  # Quarter mile for fuzzy matching
+        self.region_distance_threshold_miles = REGION_DISTANCE_THRESHOLD_MILES
 
     def load_existing_data(self, data_dir: Path) -> tuple[dict, dict]:
         """Load regional centers and saved/labeled places data"""
@@ -1304,13 +1320,13 @@ class ReviewVisitsExtractor:
         all_places = []
 
         # Load regional centers
-        regional_file = data_dir / 'regional_centers.json'
+        regional_file = data_dir / REGIONAL_CENTERS_FILE
         if regional_file.exists():
             with open(regional_file) as f:
                 regional_centers = json.load(f)
 
         # Load saved places
-        saved_file = data_dir / 'saved_places.json'
+        saved_file = data_dir / SAVED_PLACES_FILE
         if saved_file.exists():
             with open(saved_file) as f:
                 saved_data = json.load(f)
@@ -1517,7 +1533,7 @@ class ReviewVisitsExtractor:
                 'reviews': processed_reviews,
             }
 
-            with open(output_dir / 'review_visits.json', 'w') as f:
+            with open(output_dir / REVIEW_VISITS_FILE, 'w') as f:
                 json.dump(review_visits_output, f, indent=2)
 
             logger.info(f"Successfully processed {len(processed_reviews)} reviews")
@@ -1527,7 +1543,7 @@ class ReviewVisitsExtractor:
             logger.info(
                 f"Matched {matched_to_regions} reviews to regions ({(matched_to_regions / len(processed_reviews) * 100):.1f}%)"
             )
-            logger.info(f"Output written to {output_dir / 'review_visits.json'}")
+            logger.info(f"Output written to {output_dir / REVIEW_VISITS_FILE}")
 
             return True
 
@@ -1540,7 +1556,7 @@ class VisitTimelineGenerator:
     """Generate comprehensive visit timeline from all data sources"""
 
     def __init__(self):
-        self.deduplication_window_hours = 24  # Consider visits within 24 hours as same visit
+        self.deduplication_window_hours = DEDUPLICATION_WINDOW_HOURS  # Consider visits within 24 hours as same visit
 
     def load_all_data(self, data_dir: Path) -> tuple[dict, dict, dict, dict]:
         """Load all required data sources"""
@@ -1550,25 +1566,25 @@ class VisitTimelineGenerator:
         regional_centers = {}
 
         # Load photo locations
-        photo_file = data_dir / 'photo_locations.json'
+        photo_file = data_dir / PHOTO_LOCATIONS_FILE
         if photo_file.exists():
             with open(photo_file) as f:
                 photo_locations = json.load(f)
 
         # Load review visits
-        review_file = data_dir / 'review_visits.json'
+        review_file = data_dir / REVIEW_VISITS_FILE
         if review_file.exists():
             with open(review_file) as f:
                 review_visits = json.load(f)
 
         # Load saved places
-        saved_file = data_dir / 'saved_places.json'
+        saved_file = data_dir / SAVED_PLACES_FILE
         if saved_file.exists():
             with open(saved_file) as f:
                 saved_places = json.load(f)
 
         # Load regional centers
-        regional_file = data_dir / 'regional_centers.json'
+        regional_file = data_dir / REGIONAL_CENTERS_FILE
         if regional_file.exists():
             with open(regional_file) as f:
                 regional_centers = json.load(f)
@@ -1862,7 +1878,7 @@ class VisitTimelineGenerator:
                 'rankings': {'most_visited_regions': region_rankings[:10]},
             }
 
-            with open(output_dir / 'visit_timeline.json', 'w') as f:
+            with open(output_dir / VISIT_TIMELINE_FILE, 'w') as f:
                 json.dump(timeline_output, f, indent=2)
 
             logger.info(f"Successfully generated visit timeline for {len(region_timelines)} regions")
@@ -1871,7 +1887,7 @@ class VisitTimelineGenerator:
             logger.info(
                 f"Top region: {region_rankings[0][0]} ({region_rankings[0][1]} visits)" if region_rankings else "No visits found"
             )
-            logger.info(f"Output written to {output_dir / 'visit_timeline.json'}")
+            logger.info(f"Output written to {output_dir / VISIT_TIMELINE_FILE}")
 
             return True
 
@@ -1895,31 +1911,31 @@ class SummaryReportGenerator:
         review_visits = {}
 
         # Load visit timeline (main source)
-        timeline_file = data_dir / 'visit_timeline.json'
+        timeline_file = data_dir / VISIT_TIMELINE_FILE
         if timeline_file.exists():
             with open(timeline_file) as f:
                 visit_timeline = json.load(f)
 
         # Load regional centers
-        regional_file = data_dir / 'regional_centers.json'
+        regional_file = data_dir / REGIONAL_CENTERS_FILE
         if regional_file.exists():
             with open(regional_file) as f:
                 regional_centers = json.load(f)
 
         # Load saved places
-        saved_file = data_dir / 'saved_places.json'
+        saved_file = data_dir / SAVED_PLACES_FILE
         if saved_file.exists():
             with open(saved_file) as f:
                 saved_places = json.load(f)
 
         # Load photo locations
-        photo_file = data_dir / 'photo_locations.json'
+        photo_file = data_dir / PHOTO_LOCATIONS_FILE
         if photo_file.exists():
             with open(photo_file) as f:
                 photo_locations = json.load(f)
 
         # Load review visits
-        review_file = data_dir / 'review_visits.json'
+        review_file = data_dir / REVIEW_VISITS_FILE
         if review_file.exists():
             with open(review_file) as f:
                 review_visits = json.load(f)
@@ -2160,11 +2176,11 @@ class SummaryReportGenerator:
                 "",
                 "### Data Files",
                 "",
-                "- [`visit_timeline.json`](visit_timeline.json) - Complete visit timeline data",
-                "- [`regional_centers.json`](regional_centers.json) - Regional clustering results",
-                "- [`saved_places.json`](saved_places.json) - Processed saved places",
-                "- [`photo_locations.json`](photo_locations.json) - Photo geolocation correlations",
-                "- [`review_visits.json`](review_visits.json) - Review visit confirmations",
+                f"- [`{VISIT_TIMELINE_FILE}`]({VISIT_TIMELINE_FILE}) - Complete visit timeline data",
+                f"- [`{REGIONAL_CENTERS_FILE}`]({REGIONAL_CENTERS_FILE}) - Regional clustering results",
+                f"- [`{SAVED_PLACES_FILE}`]({SAVED_PLACES_FILE}) - Processed saved places",
+                f"- [`{PHOTO_LOCATIONS_FILE}`]({PHOTO_LOCATIONS_FILE}) - Photo geolocation correlations",
+                f"- [`{REVIEW_VISITS_FILE}`]({REVIEW_VISITS_FILE}) - Review visit confirmations",
                 "",
                 f"**Report Generated:** {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}",
                 "",
@@ -2193,12 +2209,12 @@ class SummaryReportGenerator:
             # Write output
             output_dir.mkdir(exist_ok=True)
 
-            with open(output_dir / 'summary_report.md', 'w') as f:
+            with open(output_dir / SUMMARY_REPORT_FILE, 'w') as f:
                 f.write('\n'.join(self.report_lines))
 
             logger.info(f"Successfully generated summary report with {len(self.report_lines)} lines")
             logger.info(f"Report covers {len(timeline_data.get('regions', {}))} regions")
-            logger.info(f"Output written to {output_dir / 'summary_report.md'}")
+            logger.info(f"Output written to {output_dir / SUMMARY_REPORT_FILE}")
 
             return True
 
@@ -2214,62 +2230,22 @@ class DataAnalysisPipeline:
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.dry_run = dry_run
-        self.pipeline_steps = [
-            {
-                'name': 'extract-labeled-places',
-                'description': 'Extract and group starred/labeled places by region',
-                'required_files': ['saved/My labeled places/Labeled places.json'],
-                'output_files': ['labeled_places.json', 'regional_centers.json'],
-                'function': self._run_labeled_places,
-            },
-            {
-                'name': 'extract-saved-places',
-                'description': 'Extract saved places with timestamps',
-                'required_files': ['your_places/saved_places.json'],
-                'output_files': ['saved_places.json'],
-                'dependencies': ['extract-labeled-places'],
-                'function': self._run_saved_places,
-            },
-            {
-                'name': 'extract-photo-metadata',
-                'description': 'Extract geolocation data from photo metadata',
-                'required_files': [],
-                'output_files': ['photo_metadata.json'],
-                'function': self._run_photo_metadata,
-            },
-            {
-                'name': 'correlate-photos-to-regions',
-                'description': 'Match geotagged photos to regions',
-                'required_files': [],
-                'output_files': ['photo_locations.json'],
-                'dependencies': ['extract-labeled-places', 'extract-photo-metadata'],
-                'function': self._run_photo_correlation,
-            },
-            {
-                'name': 'extract-review-visits',
-                'description': 'Extract review timestamps as visit confirmations',
-                'required_files': ['your_places/reviews.json'],
-                'output_files': ['review_visits.json'],
-                'dependencies': ['extract-labeled-places'],
-                'function': self._run_review_visits,
-            },
-            {
-                'name': 'generate-visit-timeline',
-                'description': 'Generate comprehensive visit timeline',
-                'required_files': [],
-                'output_files': ['visit_timeline.json'],
-                'dependencies': ['correlate-photos-to-regions', 'extract-review-visits', 'extract-saved-places'],
-                'function': self._run_visit_timeline,
-            },
-            {
-                'name': 'generate-summary-report',
-                'description': 'Generate human-readable markdown summary',
-                'required_files': [],
-                'output_files': ['summary_report.md'],
-                'dependencies': ['generate-visit-timeline'],
-                'function': self._run_summary_report,
-            },
-        ]
+        # Create pipeline steps by adding function references to the imported steps
+        self.pipeline_steps = []
+        function_map = {
+            'extract-labeled-places': self._run_labeled_places,
+            'extract-saved-places': self._run_saved_places,
+            'extract-photo-metadata': self._run_photo_metadata,
+            'correlate-photos-to-regions': self._run_photo_correlation,
+            'extract-review-visits': self._run_review_visits,
+            'generate-visit-timeline': self._run_visit_timeline,
+            'generate-summary-report': self._run_summary_report,
+        }
+
+        for step in PIPELINE_STEPS:
+            step_with_function = step.copy()
+            step_with_function['function'] = function_map[step['name']]
+            self.pipeline_steps.append(step_with_function)
 
     def check_prerequisites(self) -> tuple[bool, list[str]]:
         """Check if all required input files exist"""
@@ -2374,7 +2350,7 @@ class DataAnalysisPipeline:
                 return False
 
         logger.info("🎉 Pipeline completed successfully!")
-        logger.info(f"📊 Generated analysis report: {self.output_dir / 'summary_report.md'}")
+        logger.info(f"📊 Generated analysis report: {self.output_dir / SUMMARY_REPORT_FILE}")
 
         return True
 
@@ -2435,14 +2411,14 @@ class DataValidator:
 
     def is_valid_coordinate(self, lat: float, lon: float) -> bool:
         """Validate coordinate ranges"""
-        return -90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0
+        return MIN_VALID_LATITUDE <= lat <= MAX_VALID_LATITUDE and MIN_VALID_LONGITUDE <= lon <= MAX_VALID_LONGITUDE
 
     def is_valid_timestamp(self, timestamp_str: str) -> bool:
         """Validate timestamp format and range"""
         try:
             dt = parse_date(timestamp_str)
             # Reasonable date range: 1990 to 2030
-            return 1990 <= dt.year <= 2030
+            return MIN_VALID_YEAR <= dt.year <= MAX_VALID_YEAR
         except Exception:
             return False
 
@@ -2553,7 +2529,7 @@ class DataValidator:
         invalid_coordinates = 0
 
         # Check saved places
-        saved_places_file = self.output_dir / 'saved_places.json'
+        saved_places_file = self.output_dir / SAVED_PLACES_FILE
         if saved_places_file.exists():
             with open(saved_places_file) as f:
                 data = json.load(f)
@@ -2605,7 +2581,7 @@ class DataValidator:
         logger.info("Validating regional assignments...")
 
         regional_file = self.output_dir / 'regional_centers.json'
-        photo_locations_file = self.output_dir / 'photo_locations.json'
+        photo_locations_file = self.output_dir / PHOTO_LOCATIONS_FILE
 
         if not regional_file.exists() or not photo_locations_file.exists():
             self.validation_results['warnings'].append("Regional assignment files not found for validation")
@@ -2664,13 +2640,13 @@ class DataValidator:
         logger.info("Validating output files...")
 
         output_files = {
-            'labeled_places': {'path': self.output_dir / 'labeled_places.json', 'required_keys': ['metadata', 'places']},
-            'regional_centers': {'path': self.output_dir / 'regional_centers.json', 'required_keys': ['metadata', 'regions']},
-            'saved_places': {'path': self.output_dir / 'saved_places.json', 'required_keys': ['metadata', 'places']},
-            'photo_metadata': {'path': self.output_dir / 'photo_metadata.json', 'required_keys': ['metadata', 'photos']},
-            'photo_locations': {'path': self.output_dir / 'photo_locations.json', 'required_keys': ['metadata', 'regions']},
-            'review_visits': {'path': self.output_dir / 'review_visits.json', 'required_keys': ['metadata', 'reviews']},
-            'visit_timeline': {'path': self.output_dir / 'visit_timeline.json', 'required_keys': ['metadata', 'regions']},
+            'labeled_places': {'path': self.output_dir / LABELED_PLACES_FILE, 'required_keys': ['metadata', 'places']},
+            'regional_centers': {'path': self.output_dir / REGIONAL_CENTERS_FILE, 'required_keys': ['metadata', 'regions']},
+            'saved_places': {'path': self.output_dir / SAVED_PLACES_FILE, 'required_keys': ['metadata', 'places']},
+            'photo_metadata': {'path': self.output_dir / PHOTO_METADATA_FILE, 'required_keys': ['metadata', 'photos']},
+            'photo_locations': {'path': self.output_dir / PHOTO_LOCATIONS_FILE, 'required_keys': ['metadata', 'regions']},
+            'review_visits': {'path': self.output_dir / REVIEW_VISITS_FILE, 'required_keys': ['metadata', 'reviews']},
+            'visit_timeline': {'path': self.output_dir / VISIT_TIMELINE_FILE, 'required_keys': ['metadata', 'regions']},
         }
 
         all_valid = True
@@ -2682,12 +2658,12 @@ class DataValidator:
             if not result['valid']:
                 all_valid = False
                 if not result['exists']:
-                    self.validation_results['errors'].append(f"Missing output file: {config['path']}")
+                    self.validation_results['errors'].append(f"Missing output file: {file_config['path']}")
                 else:
                     self.validation_results['errors'].append(f"Invalid output {file_type}: {result['missing_keys']}")
 
         # Validate summary report
-        summary_report = self.output_dir / 'summary_report.md'
+        summary_report = self.output_dir / SUMMARY_REPORT_FILE
         report_result = {
             'exists': summary_report.exists(),
             'size': summary_report.stat().st_size if summary_report.exists() else 0,
@@ -2888,7 +2864,7 @@ def main():
 
         # Generate and save validation report
         report = validator.generate_validation_report()
-        report_file = args.output_dir / 'validation_report.md'
+        report_file = args.output_dir / VALIDATION_REPORT_FILE
 
         try:
             args.output_dir.mkdir(exist_ok=True)
