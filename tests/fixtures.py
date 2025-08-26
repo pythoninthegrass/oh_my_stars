@@ -19,12 +19,9 @@ class TestDataFixtures:
                         "Title": "Test Location 1",
                         "Published": "2024-01-15T10:00:00.000Z",
                         "Updated": "2024-01-15T10:00:00.000Z",
-                        "Google Maps URL": "https://maps.google.com/?cid=123456789"
+                        "Google Maps URL": "https://maps.google.com/?cid=123456789",
                     },
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [-122.4194, 37.7749]
-                    }
+                    "geometry": {"type": "Point", "coordinates": [-122.4194, 37.7749]},
                 },
                 {
                     "type": "Feature",
@@ -32,14 +29,11 @@ class TestDataFixtures:
                         "Title": "Test Location 2",
                         "Published": "2024-01-16T14:30:00.000Z",
                         "Updated": "2024-01-16T14:30:00.000Z",
-                        "Google Maps URL": "https://maps.google.com/?cid=987654321"
+                        "Google Maps URL": "https://maps.google.com/?cid=987654321",
                     },
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [-74.0060, 40.7128]
-                    }
-                }
-            ]
+                    "geometry": {"type": "Point", "coordinates": [-74.0060, 40.7128]},
+                },
+            ],
         }
 
     @staticmethod
@@ -53,14 +47,11 @@ class TestDataFixtures:
                     "properties": {
                         "Title": "Test Restaurant",
                         "Date": "2024-01-15T12:00:00.000Z",
-                        "Google Maps URL": "https://maps.google.com/?cid=111222333"
+                        "Google Maps URL": "https://maps.google.com/?cid=111222333",
                     },
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [-122.4194, 37.7749]
-                    }
+                    "geometry": {"type": "Point", "coordinates": [-122.4194, 37.7749]},
                 }
-            ]
+            ],
         }
 
     @staticmethod
@@ -76,23 +67,20 @@ class TestDataFixtures:
                         "Location": {
                             "Business Name": "Test Business",
                             "Address": "123 Test St, San Francisco, CA",
-                            "Country Code": "US"
+                            "Country Code": "US",
                         },
-                        "Published": "2024-01-15T15:00:00.000Z"
+                        "Published": "2024-01-15T15:00:00.000Z",
                     },
-                    "geometry": {
-                        "type": "Point",
-                        "coordinates": [-122.4194, 37.7749]
-                    }
+                    "geometry": {"type": "Point", "coordinates": [-122.4194, 37.7749]},
                 }
-            ]
+            ],
         }
 
     @classmethod
     def create_test_data_files(cls, test_dir: Path):
         """Create all test data files in the given directory"""
         test_dir.mkdir(exist_ok=True)
-        
+
         # Create test files
         with open(test_dir / 'labeled_places.json', 'w') as f:
             json.dump(cls.get_test_labeled_places(), f, indent=2)
@@ -102,5 +90,5 @@ class TestDataFixtures:
 
         with open(test_dir / 'reviews.json', 'w') as f:
             json.dump(cls.get_test_reviews(), f, indent=2)
-        
+
         return True
