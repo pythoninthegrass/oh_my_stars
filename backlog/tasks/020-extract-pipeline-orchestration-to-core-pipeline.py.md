@@ -1,5 +1,5 @@
 ---
-id: task-009
+id: task-020
 title: Extract pipeline orchestration to core/pipeline.py
 status: To Do
 assignee: []

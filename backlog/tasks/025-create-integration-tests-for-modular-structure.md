@@ -1,5 +1,5 @@
 ---
-id: task-015
+id: task-025
 title: Create integration tests for modular structure
 status: To Do
 assignee: []

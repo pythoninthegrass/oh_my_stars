@@ -1,5 +1,5 @@
 ---
-id: task-006
+id: task-017
 title: Extract photo processing classes to core/photos.py
 status: To Do
 assignee: []

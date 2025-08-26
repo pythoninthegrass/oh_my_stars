@@ -1,5 +1,5 @@
 ---
-id: task-005
+id: task-016
 title: Extract place extraction classes to core/places.py
 status: To Do
 assignee: []
