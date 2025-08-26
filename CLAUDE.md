@@ -15,6 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 uv run main.py run-pipeline
 
 # Individual pipeline steps
+uv run main.py extract-takeout
 uv run main.py extract-labeled-places
 uv run main.py extract-saved-places
 uv run main.py extract-photo-metadata
@@ -44,7 +45,7 @@ repomix                      # Generate codebase summary
 
 ### Core Design
 
-- **Single executable**: main.py (3,065 LOC) using PEP 723 inline dependencies
+- **Single executable**: main.py using PEP 723 inline dependencies
 - **Self-contained**: All functionality in one script with `#!/usr/bin/env -S uv run --script`
 - **7-step pipeline**: Extract → Correlate → Analyze → Report
 - **Read-only operations**: Never modifies source Google Takeout data
@@ -67,9 +68,9 @@ takeout/maps/ → main.py → data/
 
 ### Dependencies
 
-- **Runtime**: Python 3.12+ managed by UV
-- **Core**: geopy, python-decouple, sh, httpx, python-dateutil
-- **Dev**: ruff (linting), pytest (testing), renovate (updates)
+- **Runtime**: Python 3.13+ managed by UV
+- **Core**: geopy, python-decouple, httpx, python-dateutil
+- **Dev**: ruff (linting)
 
 ## Configuration
 
@@ -78,7 +79,7 @@ takeout/maps/ → main.py → data/
 #### Ruff
 
 - Line length: 130 characters
-- Python target: 3.12
+- Python target: 3.13
 - Enabled: pycodestyle, pyflakes, pyupgrade, bugbear, simplify, isort
 
 #### Markdownlint
@@ -87,9 +88,7 @@ takeout/maps/ → main.py → data/
 
 ## Current TODO Items
 
-1. **Golf `main.py` to <1000 LOC** (currently 3,065 lines)
-2. **Remove emoji visual indicators** from output
-3. **Fill out README.md** (currently placeholder)
+1. **Remove emoji visual indicators** from output
 
 ## Development Notes
 
