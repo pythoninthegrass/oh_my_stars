@@ -1,9 +1,10 @@
 ---
 id: task-014
 title: Extract TakeoutExtractor class to core/takeout.py
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2025-08-26 20:46'
+updated_date: '2025-08-26 21:34'
 labels:
   - refactoring
   - core-module

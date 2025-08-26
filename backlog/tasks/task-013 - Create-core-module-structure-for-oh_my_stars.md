@@ -1,9 +1,10 @@
 ---
 id: task-013
 title: Create core module structure for oh_my_stars
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-08-26 20:45'
+updated_date: '2025-08-26 21:34'
 labels:
   - refactoring
   - architecture

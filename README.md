@@ -83,6 +83,37 @@ After running the pipeline, you'll find your analysis results in the `data/` dir
 - `data/photo_locations.json` - Photo geolocation correlations
 - `data/review_visits.json` - Review visit confirmations
 
+## Architecture
+
+### Module Structure
+
+The project is organized into a modular architecture with the following structure:
+
+```
+oh_my_stars/
+├── core/              # Core processing modules
+│   ├── __init__.py    # Core package initialization
+│   ├── takeout.py     # Google Takeout data extraction (planned)
+│   ├── places.py      # Location and place processing (planned)  
+│   ├── photos.py      # Photo geolocation processing (planned)
+│   ├── reviews.py     # Review visit extraction (planned)
+│   ├── reports.py     # Timeline and summary generation (planned)
+│   └── pipeline.py    # Main pipeline orchestration (planned)
+├── utils/             # Supporting utilities
+│   ├── __init__.py    # Utils package initialization
+│   ├── geocoding.py   # Location geocoding and caching (planned)
+│   ├── validation.py  # Data validation and testing (planned)
+│   └── helpers.py     # Common utility functions (planned)
+└── main.py            # CLI interface and entry point
+```
+
+### Design Principles
+
+- **Modular architecture** - Separate concerns into focused modules
+- **Read-only operations** - Never modifies source Google Takeout data
+- **Resume capability** - Can restart from last completed pipeline step
+- **Comprehensive caching** - Geocoding cache prevents redundant API calls
+
 ## Development
 
 For development and debugging, individual pipeline steps can be executed independently:

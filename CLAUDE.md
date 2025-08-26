@@ -45,8 +45,8 @@ repomix                      # Generate codebase summary
 
 ### Core Design
 
-- **Single executable**: main.py using PEP 723 inline dependencies
-- **Self-contained**: All functionality in one script with `#!/usr/bin/env -S uv run --script`
+- ~~**Single executable**: main.py using PEP 723 inline dependencies~~
+- ~~**Self-contained**: All functionality in one script with `#!/usr/bin/env -S uv run --script`~~
 - **7-step pipeline**: Extract → Correlate → Analyze → Report
 - **Read-only operations**: Never modifies source Google Takeout data
 
