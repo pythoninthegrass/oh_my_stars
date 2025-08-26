@@ -1,10 +1,10 @@
 ---
 id: task-012
 title: Create constants module in utils/constants.py
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-08-26 20:47'
-updated_date: '2025-08-26 20:48'
+updated_date: '2025-08-26 21:02'
 labels:
   - refactoring
   - utils-module
