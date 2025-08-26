@@ -3,6 +3,7 @@
 data/*
 takeout/maps/*
 repomix*.md
+results/*
 
 # General
 .DS_Store
