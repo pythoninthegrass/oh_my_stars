@@ -59,7 +59,10 @@ oh_my_stars uses exported Google Takeout maps data for saved places and your pla
 Once your takeout data is properly organized, run the complete analysis pipeline:
 
 ```bash
-# Run the full analysis pipeline
+# Run the full analysis pipeline (default command)
+./main.py
+
+# Or explicitly run the pipeline command
 uv run main.py run-pipeline
 ```
 
@@ -67,7 +70,18 @@ This will:
 - Extract data from your Google Maps exports
 - Correlate photos with geographic regions  
 - Generate a comprehensive travel timeline
-- Create summary reports in `data/`
+- Create a summary report at `data/summary_report.md`
+
+## Output
+
+After running the pipeline, you'll find your analysis results in the `data/` directory:
+
+- **`data/summary_report.md`** - Main human-readable analysis report with travel insights
+- `data/visit_timeline.json` - Complete chronological visit data
+- `data/regional_centers.json` - Geographic clustering results
+- `data/saved_places.json` - Processed saved places data
+- `data/photo_locations.json` - Photo geolocation correlations
+- `data/review_visits.json` - Review visit confirmations
 
 ## Development
 
@@ -111,9 +125,10 @@ uv run main.py cache-stats
 uv run main.py cache-clear
 ```
 
-<!-- TODO: todo -->
 ## TODO
 
+Outstanding tasks can be reviewed in [TODO.md](TODO.md)
 
-<!-- TODO: further reading -->
 ## Further Reading
+
+<!-- TODO -->

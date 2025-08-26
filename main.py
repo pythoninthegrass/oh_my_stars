@@ -18,11 +18,13 @@ Analyzes starred locations, saved places, and photo geolocations from Google Tak
 to generate regional visit summaries and comprehensive travel timelines.
 
 Usage:
-    main.py <command> [options]
+    main.py [command] [options]
+    
+    Default command is 'run-pipeline' if none specified.
 
 Commands:
     extract-takeout: Extract and organize Google Takeout zip file into proper directory structure
-    run-pipeline: Execute complete data analysis pipeline from start to finish
+    run-pipeline: Execute complete data analysis pipeline from start to finish (default)
     validate-data: Run comprehensive data validation suite
     extract-labeled-places: Extract and group starred/labeled places by region
     extract-saved-places: Extract saved places with timestamps and integrate with regions
@@ -909,12 +911,50 @@ class PhotoMetadataExtractor:
     def process_photo_metadata(self, photos_dir: Path, output_dir: Path) -> bool:
         """Main processing function for photo metadata"""
         try:
+            # Check if photos directory exists
+            if not photos_dir.exists():
+                logger.info(f"Photos directory not found: {photos_dir} - creating empty metadata")
+                # Create empty metadata file
+                empty_metadata = {
+                    'metadata': {
+                        'extraction_date': datetime.now(UTC).isoformat(),
+                        'source': str(photos_dir),
+                        'total_files_processed': 0,
+                        'geotagged_photos': 0,
+                        'date_range': None
+                    },
+                    'photos': []
+                }
+                
+                output_dir.mkdir(exist_ok=True)
+                with open(output_dir / 'photo_metadata.json', 'w') as f:
+                    json.dump(empty_metadata, f, indent=2)
+                
+                logger.info("Created empty photo metadata file")
+                return True
+            
             # Find all JSON metadata files
             json_files = list(photos_dir.glob("*.json"))
 
             if not json_files:
-                logger.error(f"No JSON metadata files found in {photos_dir}")
-                return False
+                logger.info(f"No JSON metadata files found in {photos_dir} - creating empty metadata")
+                # Create empty metadata file
+                empty_metadata = {
+                    'metadata': {
+                        'extraction_date': datetime.now(UTC).isoformat(),
+                        'source': str(photos_dir),
+                        'total_files_processed': 0,
+                        'geotagged_photos': 0,
+                        'date_range': None
+                    },
+                    'photos': []
+                }
+                
+                output_dir.mkdir(exist_ok=True)
+                with open(output_dir / 'photo_metadata.json', 'w') as f:
+                    json.dump(empty_metadata, f, indent=2)
+                
+                return True
 
             logger.info(f"Found {len(json_files)} metadata files to process")
 
@@ -1142,9 +1182,30 @@ class PhotoLocationCorrelator:
                 logger.error("No regional centers data found")
                 return False
 
-            if not photo_data.get('photos'):
+            if photo_data.get('photos') is None:
                 logger.error("No photo metadata found")
                 return False
+            
+            if len(photo_data.get('photos', [])) == 0:
+                logger.info("No photos to process - creating empty photo locations file")
+                # Create empty photo locations file
+                empty_locations = {
+                    'metadata': {
+                        'extraction_date': datetime.now(UTC).isoformat(),
+                        'total_photos': 0,
+                        'matched_photos': 0,
+                        'unmatched_photos': 0,
+                        'unique_regions': 0
+                    },
+                    'photo_locations': [],
+                    'unmatched_photos': []
+                }
+                
+                output_dir.mkdir(exist_ok=True)
+                with open(output_dir / 'photo_locations.json', 'w') as f:
+                    json.dump(empty_locations, f, indent=2)
+                
+                return True
 
             logger.info(f"Processing {len(photo_data['photos'])} photos against {len(regional_data['regions'])} regions")
 
@@ -2224,7 +2285,7 @@ class DataAnalysisPipeline:
             {
                 'name': 'extract-photo-metadata',
                 'description': 'Extract geolocation data from photo metadata',
-                'required_files': ['saved/Photos and videos/'],
+                'required_files': [],
                 'output_files': ['photo_metadata.json'],
                 'function': self._run_photo_metadata
             },
@@ -2858,7 +2919,7 @@ def parse_arguments():
         epilog=__doc__
     )
 
-    parser.add_argument('command', help='Command to execute')
+    parser.add_argument('command', nargs='?', default='run-pipeline', help='Command to execute (default: run-pipeline)')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be done without making changes')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging output')
     parser.add_argument('--input-dir', type=Path, default=Path('takeout/maps'), help='Path to Google Takeout data directory')
