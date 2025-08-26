@@ -24,16 +24,13 @@ SERPAPI_CACHE_FILE = 'serpapi_cache.json'
 NY_SAVED_PLACES_FILE = 'ny_saved_places.csv'
 
 # Input file mappings
-TAKEOUT_FILE_MAPPINGS = {
-    "Reviews.json": "reviews.json",
-    "Saved Places.json": "saved_places.json"
-}
+TAKEOUT_FILE_MAPPINGS = {"Reviews.json": "reviews.json", "Saved Places.json": "saved_places.json"}
 
 # Geographic constants
 GEOCODING_CACHE_EXPIRATION_DAYS = 30
-PLACE_MATCHING_TOLERANCE_MILES = 0.25       # Quarter mile for fuzzy matching
-REGION_DISTANCE_THRESHOLD_MILES = 10.0      # 10-mile radius for regional clustering
-DEDUPLICATION_WINDOW_HOURS = 24             # Consider visits within 24 hours as same visit
+PLACE_MATCHING_TOLERANCE_MILES = 0.25   # Quarter mile for fuzzy matching
+REGION_DISTANCE_THRESHOLD_MILES = 10.0  # 10-mile radius for regional clustering
+DEDUPLICATION_WINDOW_HOURS = 24         # Consider visits within 24 hours as same visit
 
 # Validation constants
 MIN_VALID_LATITUDE = -90.0

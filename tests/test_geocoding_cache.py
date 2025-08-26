@@ -2,7 +2,7 @@ import json
 import pytest
 import time
 from datetime import UTC, datetime, timedelta
-from main import GeocodingCache
+from utils.geocoding import GeocodingCache
 from pathlib import Path
 
 

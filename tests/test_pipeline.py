@@ -282,9 +282,7 @@ class TestSummaryReportGenerator:
     def test_count_photos_and_places_for_region(self, generator, sample_timeline):
         """Test counting photos and places for a region"""
         # Test with empty data
-        photo_count, place_count = generator.count_photos_and_places_for_region(
-            "San Francisco, CA, US", {}, {}
-        )
+        photo_count, place_count = generator.count_photos_and_places_for_region("San Francisco, CA, US", {}, {})
         assert isinstance(photo_count, int)
         assert isinstance(place_count, int)
 

@@ -1,9 +1,10 @@
 ---
 id: task-015
 title: Extract GeocodingCache to utils/geocoding.py
-status: To Do
+status: Done
 assignee: []
 created_date: '2025-08-26 20:46'
+updated_date: '2025-08-26 21:51'
 labels:
   - refactoring
   - utils-module
