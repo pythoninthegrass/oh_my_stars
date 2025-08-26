@@ -4,3 +4,4 @@
   - If impossible, split into proper app
 - Remove emoji visual indicators
 - ~~Fill out readme~~
+- Add folium map w/markers
