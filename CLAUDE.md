@@ -120,3 +120,4 @@ backlog task edit task-001 -s "Done"
 
 - Use project-manager-backlog agent for task creation and management
 - Completed tasks move to `@backlog/completed/`
+- NEVER manually name tasks; tasks ALWAYS use `task-nnn-kebab-case-task-title` nomenclature automatically throught the backlog cli
